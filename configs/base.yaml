@@ -10,5 +10,4 @@ precision: fp16             # fp16 autocast on CUDA; CPU always runs fp32
 runtime:
   results_root: ./runs      # MVT_RESULTS_ROOT
   data_cache_dir: ./.cache/mvt   # MVT_DATA_CACHE
-  num_workers: 0
   device: auto              # MVT_DEVICE: auto | cuda | cpu

@@ -11,19 +11,15 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import qmc
 
-from mvt.core.config import SearchSpaceConfig, config_dir
+from mvt.core.config import CONFIG_DIR, SearchSpaceConfig
 
 
 def generate(seed: int = 4776, m: int = 5, d: int = 6) -> np.ndarray:
-    try:
-        sampler = qmc.Sobol(d=d, scramble=True, seed=seed)
-    except TypeError:  # newer SciPy renamed ``seed`` to ``rng``
-        sampler = qmc.Sobol(d=d, scramble=True, rng=seed)
-    return sampler.random_base2(m=m)
+    return qmc.Sobol(d=d, scramble=True, seed=seed).random_base2(m=m)
 
 
 def table_path(cfg: SearchSpaceConfig) -> Path:
-    return config_dir() / cfg.sobol.table
+    return CONFIG_DIR / cfg.sobol.table
 
 
 def write_table(cfg: SearchSpaceConfig) -> Path:

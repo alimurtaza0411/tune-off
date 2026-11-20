@@ -16,10 +16,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
-def config_dir() -> Path:
-    return Path(os.environ.get("MVT_CONFIG_DIR", REPO_ROOT / "configs"))
+CONFIG_DIR = REPO_ROOT / "configs"
 
 
 class _Strict(BaseModel):
@@ -68,7 +65,6 @@ class ScheduleConfig(_Strict):
 class RuntimeConfig(_Strict):
     results_root: str
     data_cache_dir: str
-    num_workers: int = 0
     device: str = "auto"
 
 
@@ -170,12 +166,11 @@ class ScaleConfig(_Strict):
     n_heads: int | None = None
     mlp_hidden: int | None = None
     expected_non_embedding: int | None = None
-    extension: bool = False
 
 
 # ---------------------------------------------------------------- loaders
 def _read_yaml(relative: str) -> Any:
-    return yaml.safe_load((config_dir() / relative).read_text())
+    return yaml.safe_load((CONFIG_DIR / relative).read_text())
 
 
 def load_experiment() -> ExperimentConfig:
@@ -200,13 +195,13 @@ def load_search_space() -> SearchSpaceConfig:
 
 
 def load_task_config(name: str) -> TaskConfig:
-    path = config_dir() / "tasks" / f"{name}.yaml"
+    path = CONFIG_DIR / "tasks" / f"{name}.yaml"
     if path.exists():
         return TaskConfig(**_read_yaml(f"tasks/{name}.yaml"))
     debug = _read_yaml("tasks/debug.yaml")
     if name in debug:
         return TaskConfig(**debug[name])
-    raise FileNotFoundError(f"No task config for '{name}' in {config_dir() / 'tasks'}")
+    raise FileNotFoundError(f"No task config for '{name}' in {CONFIG_DIR / 'tasks'}")
 
 
 def load_model_config(arch: str) -> ModelConfig:
@@ -215,9 +210,7 @@ def load_model_config(arch: str) -> ModelConfig:
 
 def load_scale(name: str, arch: str) -> ScaleConfig:
     raw = _read_yaml("scales.yaml")[name]
-    return ScaleConfig(
-        name=name, d_model=raw["d_model"], extension=raw.get("extension", False), **raw[arch]
-    )
+    return ScaleConfig(name=name, d_model=raw["d_model"], **raw[arch])
 
 
 @dataclass(frozen=True)
@@ -252,7 +245,7 @@ def load_resolved_config(task: str, fraction: float, scale: str, arch: str) -> R
     )
 
 
-RUNTIME_ONLY_FIELDS = ("results_root", "data_cache_dir", "num_workers", "device")
+RUNTIME_ONLY_FIELDS = ("results_root", "data_cache_dir", "device")
 
 
 def config_hash(cfg: ResolvedConfig) -> str:

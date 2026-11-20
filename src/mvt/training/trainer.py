@@ -53,13 +53,6 @@ def eval_points(total_steps: int, n_evals: int) -> list[int]:
     return sorted({math.ceil(k * total_steps / n_evals) for k in range(1, n_evals + 1)})
 
 
-def make_grad_scaler(enabled: bool):
-    try:
-        return torch.amp.GradScaler("cuda", enabled=enabled)
-    except (AttributeError, TypeError):  # torch < 2.3
-        return torch.cuda.amp.GradScaler(enabled=enabled)
-
-
 def compute_loss(logits: torch.Tensor, labels: torch.Tensor, head: str) -> torch.Tensor:
     if head == "seq_cls":
         return F.cross_entropy(logits.float(), labels)
@@ -135,7 +128,7 @@ def train_and_evaluate(
         model, hparams.learning_rate, hparams.weight_decay, optim_cfg, device
     )
     scheduler = make_scheduler(optimizer, total, hparams.warmup_fraction, final_lr_ratio)
-    scaler = make_grad_scaler(use_amp)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
     out = TrainOutput(status="ok", total_steps=total)
     best_score, best_state = -math.inf, None

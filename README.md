@@ -1,280 +1,343 @@
 # tune-off: Is Mamba Harder to Tune?
 
-**Mamba vs. Transformers under equal, paired tuning budgets, across tasks, data sizes and model sizes.**
+A controlled comparison of **Mamba** and a **LLaMA-style Transformer** in which both models get exactly the same
+hyperparameter-tuning budget.
+
 COMS 4776 Neural Networks and Deep Learning, Columbia University, Fall 2026 · Mentor: Todd Morrill
 Team: Alimurtaza Mustafa Merchant · Rajvardhan Patil · Pranav Prabhat Sinha
 
-> **Status: v0.1.0 (first lightweight version).** The engine runs end to end on CPU (`python -m mvt smoke`).
-> The three real tasks (`sst2`, `conll2003`, `wikitext2`) and the analysis metrics are still to be written by
-> their owners, against the contracts below.
+> **Status (v0.1.0):** the full pipeline runs end to end on CPU with synthetic debug tasks.
+> Still to do: the three real tasks (`sst2`, `conll2003`, `wikitext2`) and the analysis metrics.
+
+**Contents:** [Why](#why-this-project) · [The experiment](#the-experiment) · [Getting started](#getting-started) ·
+[Running experiments](#running-experiments) · [Code map](#how-the-code-is-organised) ·
+[Design decisions](#design-decisions) · [Rules for contributors](#rules-every-contributor-must-keep) ·
+[Adding a task](#adding-a-task) · [Analysis](#analysis) · [Troubleshooting](#troubleshooting) · [Glossary](#glossary)
 
 ---
 
-## 1. Overview
+## Why this project
 
-Mamba, a selective state-space model, is the main alternative to the Transformer. At large scale it matches strong
-Transformer baselines on language modelling, but head-to-head comparisons usually train each architecture with a
-single recipe. Tuning effort alone can change which architecture looks better, and a 2025 study found that Mamba
-trains well only inside a narrow learning-rate window, though only on synthetic tasks.
+Mamba is the main alternative to the Transformer, and at large scale it matches strong Transformers on language
+modelling. But most head-to-head comparisons train each model with **one fixed recipe**. That hides a confounder:
+one model may simply have been easier to tune. Re-tuning has reversed published rankings before, and a 2025 study
+found that Mamba trains well only inside a narrow learning-rate window. That study used synthetic tasks only.
 
-We train small Mamba and LLaMA-style Transformer models from scratch on three real NLP tasks, at two training-data
-sizes and two model sizes. Both models get **identical, paired tuning budgets**. We measure who wins as tuning effort
-grows, how forgiving each architecture is to its hyperparameters, and which hyperparameters explain the difference.
+We test this on **real NLP tasks**. Both architectures get identical, paired tuning budgets, and we ask:
 
-**How it works, in three lines**
-1. Every cell (task × data fraction × model size) trains both architectures on the **same 32 Sobol hyperparameter points with the same seeds**, then 24 TPE trials, then 5+5 test replicates.
-2. Each trial writes one JSON result; `mvt export` turns a cell into one CSV.
-3. The analysis computes expected-best curves, robustness, fANOVA importance and tunability from those CSVs.
-
-## 2. Research questions and hypotheses
-
-| ID | Question |
+| | Question |
 |---|---|
-| **RQ1** | Under equal, paired tuning budgets, which architecture performs better on each task, and does the answer change with the tuning budget *n*? |
-| **RQ2** | Is Mamba less forgiving to hyperparameter choice than a LLaMA-style Transformer, and how much of its sensitivity is explained by the learning rate? |
-| **RQ3** | How do data scarcity (25% vs. 100%) and model size (≈2M vs. ≈8M non-embedding parameters) change the answers? |
-| **RQ4** | Do the conclusions hold under both random (Sobol) and Bayesian (TPE) search, and do good configurations transfer across tasks and sizes? |
+| **RQ1** | Which architecture wins on each task, and does the winner change as the tuning budget grows? |
+| **RQ2** | Is Mamba less forgiving of hyperparameter choices, and is the learning rate the reason? |
+| **RQ3** | How do less training data (25% vs. 100%) and a bigger model (≈2M vs. ≈8M parameters) change the answers? |
+| **RQ4** | Do the conclusions survive a different search method (Sobol vs. TPE), and do good settings transfer between tasks? |
 
-**Pre-registered hypotheses** (support rules fixed before any experiment runs):
-- **C1 (sensitivity).** For each task, fraction and scale: Robust_Mamba < Robust_Transformer **and** Imp_Mamba(lr) > Imp_Transformer(lr). *Supported* if the paired-bootstrap 95% CI of each difference excludes 0 in the predicted direction.
-- **C2 (data scarcity).** Gap(n) = Best_T(n) − Best_M(n) is larger with 100% data than with 25%. *Supported* if the 95% CI of Gap_100%(n) − Gap_25%(n) lies above 0 at every n ∈ {1, 2, 4, 8, 16, 32}.
-- **E1 (model size, exploratory).** How the robustness gap and LR importance change from 2M to 8M. No directional prediction.
+**Hypotheses, fixed before any run** (a refuted hypothesis is still a result):
+- **C1, sensitivity:** Mamba is less forgiving (lower robustness), and the learning rate explains more of its score variance. Supported where the paired-bootstrap 95% confidence interval of each difference excludes zero in that direction.
+- **C2, data scarcity:** the Transformer's lead is larger with 100% data than with 25%. Supported where the confidence interval of that difference is above zero at every budget n ∈ {1, 2, 4, 8, 16, 32}.
+- **E1, model size (exploratory):** how robustness and learning-rate importance change from 2M to 8M parameters. No predicted direction.
 
-A refuted hypothesis is a valid result and is reported as such.
+**What we do not claim:** anything about billion-parameter models, Mamba's speed or long-sequence efficiency
+(our inputs are short), Mamba-2, hybrids, pretrained models, or that either architecture is "better" overall.
 
-**Scope.** We claim results for ≈2M/≈8M-parameter models trained from scratch on three tasks, Mamba-1 vs. a
-LLaMA-style Transformer, under equal budgets. We do **not** claim anything about billion-parameter models, Mamba's
-speed or long-sequence efficiency, Mamba-2, hybrids, pretrained models, or which architecture is "better" overall.
+## The experiment
 
-**Grid.** 2 architectures × 3 tasks (`sst2`, `conll2003`, `wikitext2`) × 2 fractions (0.25, 1.0) × 2 scales
-(`2m`, `8m`) = **12 cells**, each run for both architectures. Per (cell, architecture): 32 Sobol + 24 TPE + 5 best +
-5 default = **66 runs**; **1,584 runs** total. All `2m` cells run first as a rehearsal.
+### The grid
 
-## 3. Quickstart
+| Axis | Values |
+|---|---|
+| Architecture | `transformer` (LLaMA-style) · `mamba` (Mamba-1) |
+| Task | `sst2` sentiment (accuracy) · `conll2003` named entities (entity F1) · `wikitext2` language modelling (perplexity) |
+| Training data | 25% · 100% |
+| Model size | `2m` (≈2M non-embedding parameters) · `8m` (≈8M) |
+
+A **cell** is one task × data size × model size, which gives **12 cells**. Every cell is run for both architectures.
+
+### What happens inside one cell
+
+| Phase | Runs per architecture | What it does | Used for |
+|---|---|---|---|
+| `sobol` | 32 | Trains 32 fixed hyperparameter settings | **All main measurements** |
+| `tpe` | 24 | Optuna's TPE studies the Sobol results and proposes better settings | Finding the best setting; checking RQ4 |
+| `best` | 5 | Retrains the best setting found with 5 seeds, scored on test | Final test performance |
+| `default` | 5 | Retrains the shared default setting with the same 5 seeds | How much tuning helps |
+
+That is 66 runs per architecture per cell, and **1,584 runs** in total. All `2m` cells run first as a cheap rehearsal.
+
+**Pairing is the core idea.** Sobol trial *i* uses identical hyperparameters **and** an identical random seed for
+both architectures. The architecture is then the only difference within each pair. The 32 Sobol settings come from
+one committed table, [`configs/sobol_32.csv`](configs/sobol_32.csv), reused in every cell. This makes results
+comparable across tasks, data sizes and model sizes.
+
+## Getting started
+
+Requires Python ≥ 3.10.
 
 ```bash
-# CPU / laptop
-pip install -e ".[dev,analysis]"
-python -m mvt info                 # environment report
-python -m mvt smoke                # end-to-end CPU check, < 3 minutes
-pytest -m "not gpu and not data"   # the CI test suite
+git clone <repo-url> tune-off && cd tune-off
+pip install -e ".[dev,analysis]"     # CPU is enough for development
 
-# Colab / GPU: see notebooks/colab_runner.ipynb (installs the [cuda,tasks] extras)
-
-# Run one cell (resumable: just run it again after a disconnect)
-export MVT_OWNER=<your-name>
-python -m mvt run --task sst2 --fraction 0.25 --scale 2m
-python -m mvt status
-python -m mvt export --task sst2   # -> results/sst2-025-2m.csv ...
-python -m mvt validate             # checks results/*.csv
+python -m mvt info                    # environment report (GPU, versions, Mamba kernel)
+python -m mvt smoke                   # full pipeline on synthetic tasks, about 1 minute on CPU
+pytest -m "not gpu and not data"      # the test suite CI runs
 ```
 
-## 4. Architecture overview
+Extras: `[cuda]` installs the fast Mamba kernels (GPU only), `[tasks]` installs `datasets` and `seqeval` for the real
+tasks. On Colab, use [`notebooks/colab_runner.ipynb`](notebooks/colab_runner.ipynb), which installs everything.
+
+## Running experiments
+
+**1. Set three environment variables:**
+
+| Variable | Meaning | On Colab |
+|---|---|---|
+| `MVT_OWNER` | Your name, recorded in every result (required for real runs) | your name |
+| `MVT_RESULTS_ROOT` | Where result files go (default `./runs`) | a Google Drive folder |
+| `MVT_DATA_CACHE` | Where processed datasets are cached (default `./.cache/mvt`) | `/content/...` (local disk, not Drive) |
+
+**2. Run a cell, check progress, export:**
+
+```bash
+python -m mvt run --task sst2 --fraction 0.25 --scale 2m   # all phases, both architectures
+python -m mvt status                                       # progress per cell / architecture / phase
+python -m mvt export --task sst2                           # writes results/sst2-025-2m.csv, ...
+python -m mvt validate                                     # checks results/*.csv
+```
+
+Useful options for `run`: `--phase sobol|tpe|replicates`, `--arch transformer|mamba`, `--limit N`
+(stop after N trials) and `--retry-failed`.
+
+**Interruptions are safe.** Each finished trial is saved immediately as its own file. If a run stops for any reason,
+such as Ctrl-C or a Colab disconnect, run the same command again. Finished trials are skipped, and only the
+interrupted trial restarts, with the same seed.
+
+**Real runs need a clean checkout.** The `sobol`, `tpe`, `best` and `default` phases refuse to start if the git tree
+has uncommitted changes or `MVT_OWNER` is unset. This way, every result can be traced to an exact commit.
+
+**A cell is done** when `mvt status` shows 66/66 for both architectures, `mvt validate` passes, and the exported CSV
+is merged through a pull request. Commit only your own cells' CSVs, never the raw run folders.
+
+## How the code is organised
 
 ```
-configs/*.yaml ──> core.config ──> ResolvedConfig (+ config_hash)
-                                        │
-        registry ──> Task.build(fraction) ──> TaskData (examples)
-                                        │
-             data.batching (shared) ──> batches  ──>  models.build_model ──> SequenceModel
-                                        │
-                     training.trainer ──> TrainOutput ──> search.trial ──> TrialResult JSON
-                                        │
-     search.runner (Sobol / TPE / replicates, resumable) ──> mvt export ──> results/{cell}.csv
-                                        │
-                                  analysis.io ──> metrics and figures
+configs/*.yaml ─▶ resolved config ─▶ Task.build() ─▶ examples ─▶ shared batching ─▶ model ─▶ trainer
+                                                                                              │
+results/{cell}.csv ◀── mvt export ◀── one JSON file per trial ◀── runner (Sobol → TPE → replicates)
+        │
+        ▼
+   analysis (metrics and figures)
 ```
 
-| Module | Responsibility |
+| Folder | What lives there |
 |---|---|
-| `mvt/__main__.py` | The CLI |
-| `core/config.py` | Pydantic models for every YAML, `load_resolved_config`, `config_hash` |
-| `core/registry.py` | `register_task`, `register_model`, auto-discovery |
-| `core/types.py` | `TaskSpec`, examples, `TaskData`, `HParams`, `TrialRequest` |
-| `core/seeding.py` | `derive_seed`, `seed_everything` |
-| `core/env.py` | git state, versions, device, Mamba kernel detection |
-| `core/results.py` | `TrialResult` schema v1, atomic write, export, validation |
-| `data/` | `Vocab`, batching (bucketed, right-padded), subsampling, cache |
-| `tasks/base.py`, `_template.py`, `debug.py` | Task contract, a commented template, synthetic tasks |
-| `models/` | Transformer, Mamba (`cuda` + pure-PyTorch `ref`, BiMamba), shared head |
-| `training/` | AdamW groups, warmup-cosine schedule, the training loop |
-| `search/` | Search space, Sobol table, TPE, single trial, cell runner, pilot |
-| `analysis/io.py` | Load CSVs with the inclusion and floor rules |
+| `configs/` | **Every experimental setting.** Grid, recipe, search space, model sizes, one file per task, the Sobol table |
+| `src/mvt/core/` | Config loading, seeds, shared data types, the result-file format, export and validation |
+| `src/mvt/data/` | Vocabulary, batching and padding, data subsets, the dataset cache |
+| `src/mvt/tasks/` | One file per task, plus `base.py`, a commented `_template.py` and synthetic `debug.py` tasks |
+| `src/mvt/models/` | The Transformer, Mamba (fast CUDA and pure-PyTorch versions) and the shared model shell |
+| `src/mvt/training/` | Optimiser, learning-rate schedule and the training loop |
+| `src/mvt/search/` | Search space, Sobol table, TPE, running one trial, running a cell, the pilot |
+| `src/mvt/analysis/` | Loading exported results; metrics and figures go here |
+| `tests/` | `unit`, `contract`, `smoke` (CPU, in CI), `gpu` (Colab), `data` (real datasets) |
+| `notebooks/` | The Colab launcher (no experiment logic) |
 
-## 5. Design decisions with rationale
+Entry point: `python -m mvt <command>`. Commands are `info`, `smoke`, `sobol --check`, `pilot`, `run`, `status`,
+`export` and `validate`.
 
-### 5.1 Models (both architectures)
-- Trained from scratch. **Embedding → dropout → N pre-norm residual layers → final RMSNorm → task head.**
-- Residual layer: `x = x + Dropout(Mixer(RMSNorm(x)))`. One tuned dropout rate, applied after the embedding and on every residual branch. RMSNorm ε = 1e-5.
-- Heads: `seq_cls` masked mean pooling + linear; `tok_cls` per-token linear; `lm` tied to the embedding.
-- **Transformer (LLaMA-style):** RoPE (base 10,000), no biases, SwiGLU MLP, head dimension 64, SDPA attention (causal for `lm`, key-padding mask otherwise). Init N(0, 0.02), residual output projections scaled by 1/√(2L). *Rationale:* the strongest, most stable modern baseline; a fragile baseline would exaggerate differences.
-- **Mamba-1:** `mamba_ssm.Mamba` v1 mixer (d_state 16, d_conv 4, expand 2, dt_rank ⌈d/16⌉), no separate MLP, no positional encoding. Mixer internals keep the `mamba_ssm` init; embedding and linear layers N(0, 0.02); `out_proj` scaled by 1/√L.
-  - `impl: cuda` uses the fused kernels; `impl: ref` is a pure-PyTorch mixer with identical parameter names, shapes and init (CPU, tests, fallback; valid scores but not valid timings). `auto` picks `cuda` when possible. The implementation is recorded in every result.
-  - **BiMamba** for `seq_cls`/`tok_cls`: `Mixer(x) + Reverse(Mixer(Reverse(x)))` with **shared weights** (as a Transformer encoder uses the same weights both ways; keeps parameter counts equal).
-  - **Padding:** `mamba_ssm` has no padding mask. Batches are right-padded, pads are zeroed before each mixer, and `Reverse` is length-aware (real tokens reversed, pads stay at the end), so pads never influence real positions. A contract test enforces this.
-- **Parameter counting:** "non-embedding" = all trainable parameters except the token embedding (counted once when tied) and the task head.
+## Design decisions
 
-### 5.2 Scales (width only; depth fixed: Transformer 10 layers, Mamba 18)
+Each choice below exists to keep the comparison fair. All values live in `configs/` and are fixed before experiments.
 
-| Scale | d_model | Transformer layers / heads / mlp_hidden | Transformer non-emb. | Mamba layers | Mamba non-emb. | Diff. |
-|---|---|---|---|---|---|---|
-| `2m` | 128 | 10 / 2 / 384 | 2,132,608 | 18 | 2,099,072 | 1.6% |
-| `8m` | 256 | 10 / 4 / 704 | 8,033,536 | 18 | 7,884,544 | 1.9% |
-| `4m` (ext.) | 192 | 10 / 3 / 512 | 4,427,712 | 18 | 4,531,008 | 2.3% |
-| `30m` (ext.) | 512 | 10 / 8 / 1344 | 31,140,352 | 18 | 30,514,688 | 2.0% |
+### Models
 
-Per layer: Transformer = 4d² + 3·d·h + 2d. Mamba (D = 2d, R = ⌈d/16⌉, N = 16) = 4d² + 5D + D(R + 2N) + (RD + D) + DN + D + Dd + d. Both stacks add a final norm (d). The counts are checked exactly by tests.
+Both models share the same shell: token embedding → dropout → residual layers → final RMSNorm → task head. Each
+layer is `x = x + Dropout(Mixer(RMSNorm(x)))`. Both use the same dropout placement and the same heads: mean pooling
+for classification, a per-token layer for tagging, and an output layer tied to the embedding for language modelling.
 
-### 5.3 Training recipe (fixed for every run)
+- **Transformer:** LLaMA-style, with rotary position embeddings, a SwiGLU feed-forward block and no biases. This is the "Transformer++" baseline the Mamba paper itself uses. *Why:* it's the strongest, most stable modern baseline. A fragile baseline would exaggerate any difference.
+- **Mamba:** Mamba-1 blocks from `mamba_ssm`, with standard settings. On GPU we use the fast CUDA kernels. A pure-PyTorch copy with identical weights runs on CPU for tests; its scores are valid but its timings are not.
+- **Classification and tagging read text in both directions.** The Transformer attends both ways. Mamba runs the same block forwards and backwards, with shared weights, and adds the two results. Language modelling is left-to-right for both.
+- **Padding never leaks into results.** Mamba has no padding mask, so pads are zeroed and the backward pass reverses only the real tokens. A test checks that adding padding never changes outputs.
+
+**Model sizes are matched.** Depth is fixed (Transformer 10 layers, Mamba 18) and only the width changes between
+sizes. Counts exclude the embedding and the task head, because WikiText-2's 33k-word vocabulary would otherwise
+dominate.
+
+| Size | Width | Transformer parameters | Mamba parameters | Difference |
+|---|---|---|---|---|
+| `2m` | 128 | 2,132,608 | 2,099,072 | 1.6% |
+| `8m` | 256 | 8,033,536 | 7,884,544 | 1.9% |
+
+### Training recipe (identical for every run)
 
 | Setting | Value |
 |---|---|
-| Optimiser | AdamW, β = (0.9, 0.95), eps 1e-8, fused on CUDA |
-| Weight decay | On ndim ≥ 2 parameters except `_no_weight_decay` (Mamba `A_log`, `D`); never biases or norm gains |
-| Schedule | Linear warmup over `warmup_fraction × total_steps`, cosine decay to 10% of peak |
-| Precision | fp16 autocast + GradScaler on CUDA, fp32 on CPU. If a cell shows precision NaNs, **both** architectures move to fp32 |
-| Clipping | Global norm at the tuned value after unscaling; 0.0 = off |
-| Length | A fixed number of **epochs per (task, fraction)**, calibrated once by the pilot |
-| Steps | `total_steps = epochs × ceil(n_train_units / batch_size)`, run exactly |
-| Evaluation | 20 evenly spaced validation points; the run's score is the **best** of them |
-| Test | Only in `best`/`default` replicates, from the best-validation checkpoint |
-| Not used | `torch.compile`, gradient accumulation, early stopping |
+| Optimiser | AdamW, β = (0.9, 0.95); no weight decay on biases, norms or Mamba's `A_log` / `D` |
+| Schedule | Linear warmup, then cosine decay to 10% of the peak learning rate |
+| Precision | fp16 mixed precision on GPU. If a cell hits fp16 NaNs, **both** architectures switch to fp32 |
+| Length | A fixed number of epochs per task and data size, the same for every configuration, both architectures and both sizes |
+| Evaluation | Validation at 20 evenly spaced points; a run's score is its **best** validation score |
+| Test set | Used only in the `best` and `default` phases, from the best validation checkpoint |
+| Not used | Early stopping, gradient accumulation, `torch.compile` |
 
-**Why epochs calibrated to convergence.** Too short rewards whichever architecture learns faster early (a different
-question); too long wastes most of the cosine schedule after the peak. The pilot picks epochs so that good
-configurations of **both** architectures peak between 30% and 80% of training. Within a (task, fraction), every
-configuration, both architectures and both scales use the same epochs. Adequacy is reported (share of trials still
-improving at the last evaluation), not assumed. Initial guesses: SST-2 8 / 16 epochs, CoNLL 25 / 50, WikiText-2 8 / 16
-(100% / 25%).
+**Training length is calibrated, not guessed.** If runs are too short, the faster starter wins, which is a different
+question. If they are too long, most of the schedule is spent after the model has peaked. The pilot sets the epochs
+so that good runs of both architectures peak between 30% and 80% of training. The analysis then reports how many runs
+were still improving at the end.
 
-### 5.4 Hyperparameter search
-Six training hyperparameters, **identical space for both architectures**:
+### What gets tuned
 
-| # | Hyperparameter | Range / choices | Default λ₀ |
-|---|---|---|---|
-| 0 | `learning_rate` | log [1e-5, 1e-2] | 1e-3 |
-| 1 | `warmup_fraction` | [0, 0.1] | 0.05 |
-| 2 | `weight_decay` | log [1e-5, 0.3] | 0.1 |
-| 3 | `dropout` | [0, 0.5] | 0.1 |
-| 4 | `batch_size` | choice index 0–3: SST-2 {32, 64, 128, 256}; CoNLL {16, 32, 64, 128}; WikiText-2 {8, 16, 32, 64} × 256 tokens | index 1 |
-| 5 | `grad_clip` | {0.25, 0.5, 1.0, 0.0} | 1.0 |
+Six training hyperparameters, with **the same search space for both architectures**:
 
-- **Paired Sobol design.** One committed table `configs/sobol_32.csv` (scrambled Sobol, seed 4776, u-values only). Every (cell, architecture) uses the same 32 points with the same seeds, so each pair of trials differs only in architecture. 32 = 2⁵ points put exactly 8 points on each categorical choice; the first 16 are balanced too.
-- **Phases:** `sobol` 32 (all primary metrics) → `tpe` 24 (Optuna TPE seeded with all Sobol results, rebuilt from saved results for each suggestion; deterministic and resumable; no Optuna database) → `best` 5 (λ* = best floored validation score over sobol ∪ tpe, ties to the earlier phase then lower index) → `default` 5 (λ₀). Architectures are interleaved inside each phase.
+| Hyperparameter | Range | Default |
+|---|---|---|
+| Learning rate | 1e-5 to 1e-2 (log scale) | 1e-3 |
+| Warmup fraction | 0 to 0.1 | 0.05 |
+| Weight decay | 1e-5 to 0.3 (log scale) | 0.1 |
+| Dropout | 0 to 0.5 | 0.1 |
+| Batch size | 4 choices per task: SST-2 {32, 64, 128, 256}, CoNLL {16, 32, 64, 128}, WikiText-2 {8, 16, 32, 64} × 256 tokens | 2nd choice |
+| Gradient clipping | {0.25, 0.5, 1.0, off} | 1.0 |
 
-### 5.5 Data rules
-- Tasks produce examples; the core batches them, so every task is batched identically.
-- Word-level tokens; `<pad>` = 0, `<unk>` = 1. **Vocabulary from the full training pool**, independent of fraction.
-- Fractions are a fixed random subset (task `subset_seed`), identical for every trial, architecture and scale. **Validation and test never depend on the fraction.**
-- Truncation to `max_len` is counted (must be zero on val/test). Processed data is cached on local disk by fingerprint.
-- `sst2`: official train → 90/10 train pool / validation; test = official validation (872). Accuracy, floor 0.5, ε 0.01.
-- `conll2003`: case preserved, 9 IOB2 tags, entity-level micro-F1 (`seqeval`), floor 0, ε 0.01.
-- `wikitext2`: `wikitext-2-v1`, lines + `<eos>`, contiguous 257-token chunks. Score = −mean NLL; floor = −ln V; ε = ln 1.05.
+Model shapes are fixed, not tuned. The default setting is one shared modern recipe, used as the "untuned" reference.
+The Sobol table stores positions between 0 and 1 rather than actual values, so one row means the same relative
+setting on every task. Its 32 points cover each range evenly, and each batch-size and clipping choice gets exactly
+8 points.
 
-### 5.6 Scoring
-Every task reports a **score where higher is better** plus the raw metric. In analysis every score is
-`max(score, floor)`. Status `ok`; `diverged` (non-finite training loss: scored at the floor and **always** included);
-`failed` (infrastructure error: retried once, excluded, must be re-run). GradScaler-skipped steps are not divergence.
+### Data
 
-### 5.7 Seeds and provenance
-`derive_seed(*parts) = int(sha256("|".join(parts))[:8], 16)`. Trial seeds **exclude the architecture** (the pairing):
-Sobol `derive_seed(cell, "sobol", i)`, TPE `derive_seed(cell, "tpe", k)`, replicates `derive_seed(cell, "replicate", r)`.
-Every result records the git commit and dirty flag, code version, config hash, Mamba implementation, versions, GPU,
-owner and timestamps. Real phases refuse to run from a dirty tree or without `MVT_OWNER`.
+- Tasks only produce examples. **All batching and padding is shared code**, so every task is treated identically.
+- Word-level tokens. The vocabulary is built from the full training set, even when training on 25%.
+- The 25% subset is a fixed random sample, the same for every run. Validation and test sets never change.
 
-### 5.8 Pilot and code freeze
-`mvt pilot --task T`: an 8m learning-rate sweep (7 log-spaced values, λ₀ otherwise) for both fractions and
-architectures, then a 2m check at each architecture's best LR. Pre-registered rules, applied once:
-- **LR range:** if a best sweep value is at an edge, widen that end by one decade for all tasks.
-- **Length:** if any good run peaks in the last 20%, double the epochs (at most twice); else if all peak in the first 30%, halve (once); prefer longer on conflict.
-- **Sanity:** λ₀ or the best sweep run must clearly beat the floor for both architectures.
+| Task | Splits | Metric (higher is better) | Random-guess floor | Robustness margin ε |
+|---|---|---|---|---|
+| `sst2` | 90/10 split of the official train set; test = official validation (872) | accuracy | 0.5 | 0.01 |
+| `conll2003` | official train / validation / test | entity-level F1 (`seqeval`) | 0 | 0.01 |
+| `wikitext2` | official splits, 256-token chunks | −log perplexity | −ln(vocab size) | ln 1.05 (≈ 5% perplexity) |
 
-Then tag **v1.0.0**; every real result must come from v1.0.0 or an approved bug-fix version.
+### Scores and failed runs
 
-### 5.9 Compute and extensions
-Roughly 50–90 T4 GPU-hours for the grid (WikiText-2 ≈ 40%). If behind, cut in this order: TPE at 2m; replicates
-5 → 3; TPE 24 → 16 at 8m; Sobol 32 → 16 at 2m. **Never** cut a task, a fraction, the 8m Sobol phase or the calibrated
-length. Scales `4m` and `30m` exist in `configs/scales.yaml` as optional extensions.
+- Every score is "higher is better" and is never counted below random guessing (the floor).
+- **Diverged** (the loss became NaN or infinite): a genuine finding about that setting. It is scored at the floor and always kept.
+- **Failed** (out of memory, crash): an infrastructure problem. It is retried once, excluded from analysis and must be re-run.
 
-## 6. Contracts
+### Pilot and code freeze
 
-**Task** (`tasks/base.py`): `build(fraction) -> TaskData` (deterministic; val/test independent of fraction; vocab
-from the full pool; subset with `subset_seed`) and `compute_metric(predictions, references) -> (score, raw_metric)`.
-Tasks register with `@register_task("name")` in their own file. Never edit a central list.
+Before the real runs, each task owner runs `python -m mvt pilot --task <task>`. It sweeps 7 learning rates at `8m`
+and checks the best one at `2m`. Three pre-registered rules then apply once:
 
-**Batch** (`data/batching.py`): `input_ids` [B, L] right-padded with 0; `attention_mask` [B, L] bool, real tokens a
-prefix; `labels` [B] (`seq_cls`), [B, L] with −100 at pads (`tok_cls`), [B, L] next-token targets (`lm`); `n_tokens`.
-Batches are length-bucketed inside pools of 50 batches, shuffled per epoch with the trial seed.
+1. If the best learning rate sits at the edge of the range, widen the range by 10× on that side, for all tasks.
+2. If good runs are still improving in the last 20% of training, double the epochs. If they all peak in the first 30%, halve them.
+3. If neither architecture clearly beats random guessing, there is a bug. Investigate before going further.
 
-**Model** (`models/`): `build_model(arch, scale, model_cfg, spec, dropout) -> SequenceModel`;
-`forward(input_ids, attention_mask)` returns [B, C], [B, L, C] or [B, L, V]; `param_counts()`. Pads never influence
-real positions; `lm` models are causal. A new architecture is a new registered file.
+Then the code is tagged **v1.0.0** and frozen. All real results must come from that version or an approved bug fix.
 
-**Trial** (`search/trial.py`): `run_trial(TrialRequest, ResolvedConfig, owner) -> TrialResult`. Never raises on
-divergence; raises only on infrastructure errors (the runner records them as `failed` after one retry).
+### If compute runs short
 
-**Results** (`core/results.py`, schema v1): one JSON per trial at
-`{MVT_RESULTS_ROOT}/{cell_id}/{arch}/{phase}/{index:03d}.json`, `cell_id = {task}-{percent:03d}-{scale}`
-(e.g. `sst2-025-8m`). Written atomically, never overwritten without force. Fields: identity, `hparams`, `model`,
-`status`, `val_score`/`val_metric`, `test_score`/`test_metric`, `floor`, `epsilon`, curves, steps, timings, memory,
-parameter counts, precision, device, provenance. `mvt export` flattens to `results/{cell_id}.csv` (`hp_*`, `model_*`
-columns). `mvt validate` checks schema, one config hash and code-version family per cell, complete counts
-(32/24/5/5), no duplicates, identical Sobol hyperparameters and seeds across architectures, and zero failed trials.
+Cut in this order: TPE at `2m` → replicates 5 → 3 → TPE 24 → 16 at `8m` → Sobol 32 → 16 at `2m`.
+**Never** cut a task, a data size, the `8m` Sobol phase or the calibrated training length.
 
-**Config** (`core/config.py`): every experimental choice lives in YAML. `config_hash` = first 12 hex chars of SHA-256
-over the canonical resolved config, excluding runtime fields (`results_root`, `data_cache_dir`, `num_workers`,
-`device`). Environment: `MVT_OWNER` (required for real phases), `MVT_RESULTS_ROOT` (default `./runs`),
-`MVT_DATA_CACHE` (default `./.cache/mvt`), `MVT_DEVICE` (default `auto`).
+## Rules every contributor must keep
 
-**CLI** (`python -m mvt`): `info`, `smoke`, `sobol --write|--check`, `pilot --task T`,
-`run --task T --fraction F --scale S [--arch] [--phase all|sobol|tpe|replicates] [--limit N] [--retry-failed]`,
-`status`, `export --task T|--cell C|--all`, `validate`.
+These are the interfaces everyone codes against. To change one, open a GitHub issue labelled `contract-change` and get
+agreement from all three members. The skeleton owner then implements it, adding to it rather than breaking it.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow.
 
-**Changing a contract:** a GitHub issue labelled `contract-change`, agreement from all three members, implementation
-by the skeleton owner (additive where possible), a version bump with a note in the release description.
+1. **All experimental settings live in `configs/`**, never hard-coded in Python.
+2. **Tasks and models register themselves** in their own file (`@register_task("name")`). There is no central list to edit.
+3. **Tasks are deterministic.** Validation and test never depend on the data fraction, and the vocabulary comes from the full training set.
+4. **Never edit result files by hand.** Results are written by the code and checked by `mvt validate`.
 
-## 7. Adding a task
+<details>
+<summary><b>Exact interfaces: task, batch, model, results files</b></summary>
+
+**Task** (`src/mvt/tasks/base.py`): `build(fraction) -> TaskData` returns a `TaskSpec` plus train, validation and test
+example lists. `compute_metric(predictions, references) -> (score, raw_metric)`.
+
+**Batch** (built only by `src/mvt/data/batching.py`): `input_ids` [B, L] right-padded with 0; `attention_mask` [B, L]
+(True = real token); `labels` [B] for classification, [B, L] with −100 at pads for tagging, [B, L] next-token targets
+for language modelling.
+
+**Model** (`src/mvt/models/`): `forward(input_ids, attention_mask)` returns [B, classes], [B, L, tags] or
+[B, L, vocab]. Padding must not affect real positions, and language models must be causal.
+
+**Result files:** one JSON per trial at `{MVT_RESULTS_ROOT}/{cell_id}/{arch}/{phase}/{index:03d}.json`. The
+`cell_id` looks like `sst2-025-8m` (task, data percent, size). Each file records the hyperparameters, scores,
+validation curve, timings, memory, parameter counts and provenance: git commit, config hash, GPU and owner.
+`mvt export` flattens one cell into `results/{cell_id}.csv`. `mvt validate` checks complete counts (32/24/5/5),
+no duplicates, identical Sobol settings and seeds across architectures, one config version per cell, and no failed
+trials.
+
+</details>
+
+## Adding a task
+
 1. Copy `src/mvt/tasks/_template.py` to `src/mvt/tasks/<name>.py` and uncomment `@register_task("<name>")`.
-2. Fill `configs/tasks/<name>.yaml` (already drafted for the three real tasks) and **pin `dataset.revision`**.
-3. Implement `build` following the rules in the template. Override `compute_metric` only if needed.
-4. Add `tests/data/test_<name>.py` (marker `data`) asserting the expected split sizes and vocabulary size.
-5. `pytest tests/contract -m "data or not data"` must pass: the task contract tests run for every registered task.
-6. Run `python -m mvt pilot --task <name>` and report the outcome.
+2. Complete `configs/tasks/<name>.yaml` (already drafted for the three tasks) and **pin the dataset revision**.
+3. Implement `build()` by following the comments in the template.
+4. Add `tests/data/test_<name>.py` asserting the expected split sizes and vocabulary size.
+5. Make the contract tests pass: `pytest tests/contract -m "data or not data"`. They run automatically for every registered task.
+6. Run the pilot: `python -m mvt pilot --task <name>`.
 
-## 8. Adding a model (extension)
-Add `src/mvt/models/<name>.py` with a `SequenceModel` subclass decorated `@register_model("<name>")`, a
-`configs/models/<name>.yaml`, a block in `configs/scales.yaml`, and make `tests/contract/test_models.py` pass.
+## Analysis
 
-## 9. Running experiments
-- Set `MVT_OWNER`, `MVT_RESULTS_ROOT` (on Colab, a Google Drive folder) and `MVT_DATA_CACHE` (on Colab, local disk).
-- Use `notebooks/colab_runner.ipynb`. It is a thin launcher. Re-running it after a disconnect resumes the cell.
-- A cell is **done** when `mvt status` shows 66/66 per architecture, `mvt validate` passes and the CSV is merged.
-- Commit **only your own cells' CSVs**, via a pull request. Never commit raw run folders, data or checkpoints.
+The analysis reads only `results/*.csv`. `mvt.analysis.io.load_results()` already applies the inclusion rules: real
+phases only, failed runs dropped and counted, and every score floored. Main measurements use the 32 Sobol trials.
+Uncertainty comes from a paired bootstrap over the 32 Sobol indices, resampling the same indices for both
+architectures.
 
-## 10. Analysis contract
-- Inputs: `results/*.csv` only. Phases `sobol`, `tpe`, `best`, `default`. Statuses `ok` and `diverged` (failed rows are dropped and counted). Score `s = floor` if diverged, else `max(val_score, floor)`. `mvt.analysis.io.load_results` applies these rules.
-- **Expected best:** Best(n) = Σᵢ s₍ᵢ₎[(i/N)ⁿ − ((i−1)/N)ⁿ], scores ascending, N = 32 (Dodge et al., 2019).
-- **Gap** Gap(n) = Best_T(n) − Best_M(n). **Flip budget** n* = smallest n where Gap's 95% CI lies entirely on the opposite side of 0 from some smaller n.
-- **GPU-time axis:** t(n) = n × mean Sobol `wall_time_s` (only for `mamba_impl = cuda`).
-- **Robustness:** share of Sobol trials with s ≥ max(s) − ε (also at ε/2, 2ε, and on the 16-point LR sub-range u_lr ∈ [0.25, 0.75]).
-- **Importance:** fANOVA main effects (Optuna `FanovaImportanceEvaluator`, fixed seed) on the 32 Sobol trials.
-- **Tunability:** mean test over `best` − mean over `default`, paired by replicate seed. **Final performance:** test mean ± sd of λ*.
-- **Search-strategy check, training-length adequacy, transfer** (Spearman ρ of the 32 Sobol scores across tasks, scales and fractions).
-- **Uncertainty:** paired bootstrap over Sobol indices, B = 2,000 (200 for fANOVA), percentile 95% CI, seed 0.
-- **Reference test vectors:** scores [70, 80, 85, 90] → Best(1) = 81.25, Best(2) = 85.3125, Best(4) = 88.06640625; Robust with ε = 6 → 0.5.
+| Measure | Question it answers | Definition |
+|---|---|---|
+| Expected best, Best(n) | How good is the best of *n* random tries? (RQ1) | Dodge et al. (2019) formula over the 32 Sobol scores |
+| Gap(n) and flip budget | Who leads at budget *n*, and does the lead flip? (RQ1) | Best_Transformer(n) − Best_Mamba(n), with confidence intervals |
+| Robustness | How forgiving is the model? (RQ2) | Share of Sobol trials within ε of that model's best |
+| Importance | Which hyperparameters matter? (RQ2) | fANOVA on the 32 Sobol trials |
+| Tunability | How much does tuning help? | Mean test score of `best` − mean of `default` |
+| Transfer, search check | Do settings and conclusions carry over? (RQ4) | Rank correlation of Sobol scores; Sobol-only vs. Sobol + TPE |
 
-## 11. Troubleshooting
-- **`mamba_ssm` import fails ("undefined symbol")**: the wheel does not match your PyTorch/CUDA. Install the PyTorch version the wheel was built for, or build from source with `pip install . --no-build-isolation`.
-- **No CUDA Mamba:** `impl: auto` falls back to the `ref` mixer. Scores stay valid; timings do not.
-- **fp16 NaNs:** if a cell shows precision-caused NaNs, switch `precision: fp32` for **both** architectures in that cell and record it.
-- **Colab disconnects:** re-run the notebook; existing results are skipped. Keep the data cache on `/content`, results on Drive.
+<details>
+<summary><b>Exact formulas and reference test values</b></summary>
 
-## 12. References
-Gu & Dao (2023), *Mamba*, arXiv:2312.00752 · Waleffe et al. (2024), arXiv:2406.07887 · Okpekpe & Orvieto (2025),
-arXiv:2508.19029 · Seo et al. (2026), arXiv:2610.01172 · Jelassi et al. (2024), arXiv:2402.01032 · Arora et al. (2023),
-arXiv:2312.04927 · Melis, Dyer & Blunsom (2018), arXiv:1707.05589 · Dodge et al. (2019), arXiv:1909.03004 ·
-Touvron et al. (2023), arXiv:2302.13971 · Su et al. (2021), arXiv:2104.09864 · Shazeer (2020), arXiv:2002.05202 ·
-Zhang & Sennrich (2019), arXiv:1910.07467 · Zhu et al. (2024), arXiv:2401.09417 · Schiff et al. (2024),
-arXiv:2403.03234 · Hutter, Hoos & Leyton-Brown (2014) · Bergstra et al. (2011) · Bergstra & Bengio (2012) ·
-Akiba et al. (2019), arXiv:1907.10902 · Probst, Boulesteix & Bischl (2019), arXiv:1802.09596 · Socher et al. (2013) ·
-Tjong Kim Sang & De Meulder (2003) · Merity et al. (2017), arXiv:1609.07843 · Nakayama (2018), seqeval.
+- **Expected best:** sort the N = 32 scores ascending as s₍₁₎ ≤ … ≤ s₍N₎. Then Best(n) = Σᵢ s₍ᵢ₎ [(i/N)ⁿ − ((i−1)/N)ⁿ].
+- **Flip budget:** the smallest *n* at which Gap(n)'s 95% interval lies entirely on the opposite side of zero from some smaller *n*.
+- **Robustness:** also report it at ε/2 and 2ε, and on the 16 Sobol points with a mid-range learning rate.
+- **GPU-time axis:** plot Best against *n* × the mean trial time. This is valid only for runs on the CUDA Mamba kernels.
+- **Bootstrap:** 2,000 resamples (200 for fANOVA), percentile 95% intervals, seed 0.
+- **Test values:** scores [70, 80, 85, 90] give Best(1) = 81.25, Best(2) = 85.3125, Best(4) = 88.06640625. Robustness with ε = 6 is 0.5.
+
+</details>
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `mamba_ssm` import fails with "undefined symbol" | The wheel doesn't match your PyTorch or CUDA version. Install the matching PyTorch, or build from source with `pip install . --no-build-isolation`. |
+| `mvt info` shows Mamba implementation `ref` on a GPU | The fast kernels aren't installed. Scores stay valid, but timings don't. Install the `[cuda]` extra. |
+| NaN losses that look like fp16 overflow | Set `precision: fp32` in `configs/base.yaml` for that cell, for **both** architectures, and note it. |
+| Colab disconnected mid-run | Re-run the notebook. Finished trials are skipped automatically. |
+| `run` refuses to start | Commit your changes (real runs need a clean tree) and set `MVT_OWNER`. |
+
+## Glossary
+
+| Term | Meaning |
+|---|---|
+| Cell | One task × data size × model size, for example `sst2-025-8m`. |
+| Sobol points | 32 hyperparameter settings spread evenly over the search space, fixed in a committed table. |
+| TPE | Tree-structured Parzen Estimator, Optuna's Bayesian search that proposes settings near the good ones found so far. |
+| λ* / λ₀ | The best setting found / the shared default setting. |
+| Floor | The score of random guessing. No run counts below it. |
+| ε (epsilon) | The margin that counts as "about as good as the best" when measuring robustness. |
+| Non-embedding parameters | Model parameters excluding the word-embedding table and the task head. |
+
+## References
+
+- Gu & Dao (2023). *Mamba: Linear-Time Sequence Modeling with Selective State Spaces.* arXiv:2312.00752
+- Waleffe et al. (2024). *An Empirical Study of Mamba-based Language Models.* arXiv:2406.07887
+- Okpekpe & Orvieto (2025). *Revisiting Associative Recall in Modern Recurrent Models.* arXiv:2508.19029
+- Melis, Dyer & Blunsom (2018). *On the State of the Art of Evaluation in Neural Language Models.* arXiv:1707.05589
+- Dodge et al. (2019). *Show Your Work: Improved Reporting of Experimental Results.* arXiv:1909.03004
+- Hutter, Hoos & Leyton-Brown (2014). *An Efficient Approach for Assessing Hyperparameter Importance.* ICML
+- Probst, Boulesteix & Bischl (2019). *Tunability: Importance of Hyperparameters of Machine Learning Algorithms.* arXiv:1802.09596
+- Akiba et al. (2019). *Optuna: A Next-generation Hyperparameter Optimization Framework.* arXiv:1907.10902
+- Touvron et al. (2023). *LLaMA.* arXiv:2302.13971 · Zhu et al. (2024). *Vision Mamba.* arXiv:2401.09417
+- Datasets: Socher et al. (2013), SST · Tjong Kim Sang & De Meulder (2003), CoNLL-2003 · Merity et al. (2017), WikiText. arXiv:1609.07843
