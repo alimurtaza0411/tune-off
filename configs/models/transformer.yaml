@@ -1,0 +1,4 @@
+# LLaMA-style Transformer: RMSNorm pre-norm, RoPE attention (no biases), SwiGLU MLP.
+rope_base: 10000
+norm_eps: 1.0e-5
+init_std: 0.02

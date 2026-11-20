@@ -1,0 +1,16 @@
+# The experimental grid (README §"Experimental grid").
+tasks: [sst2, conll2003, wikitext2]
+fractions: [0.25, 1.0]
+scales: [2m, 8m]            # run all 2m cells first (rehearsal), then all 8m cells
+archs: [transformer, mamba]
+
+# Runs per (cell, architecture): 32 Sobol + 24 TPE + 5 best + 5 default = 66
+phases: {sobol: 32, tpe: 24, replicates: 5}
+n_evals: 20                 # validation points per run
+
+# `mvt smoke`: CPU end-to-end check on the synthetic debug tasks
+smoke:
+  tasks: [debug_cls, debug_tag, debug_lm]
+  fraction: 1.0
+  scale: tiny
+  phases: {sobol: 4, tpe: 2, replicates: 1}

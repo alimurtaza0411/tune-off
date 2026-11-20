@@ -1,0 +1,14 @@
+name: sst2
+head: seq_cls
+num_labels: 2
+dataset: {id: stanfordnlp/sst2, config: null, revision: null}   # TODO(owner): pin revision
+holdout_fraction: 0.1       # official train -> 90% train pool / 10% validation
+holdout_seed: 11
+subset_seed: 12
+min_freq: 1
+max_len: 64
+metric: accuracy
+floor: 0.5
+epsilon: 0.01
+batch_sizes: [32, 64, 128, 256]     # sentences
+epochs: {25: 16, 100: 8}            # initial guess; the pilot calibrates it

@@ -1,0 +1,12 @@
+# Mamba-1 mixer settings (mamba_ssm v1 defaults). BiMamba is used for seq_cls / tok_cls.
+d_state: 16
+d_conv: 4
+expand: 2
+dt_min: 0.001
+dt_max: 0.1
+dt_init_floor: 1.0e-4
+conv_bias: true
+bias: false
+impl: auto                  # auto | cuda | ref
+norm_eps: 1.0e-5
+init_std: 0.02

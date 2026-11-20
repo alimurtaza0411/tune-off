@@ -1,0 +1,12 @@
+name: wikitext2
+head: lm
+num_labels: null
+dataset: {id: Salesforce/wikitext, config: wikitext-2-v1, revision: null}  # TODO(owner): pin revision
+subset_seed: 32
+min_freq: 1
+max_len: 256                        # seq_len: chunks of 257 tokens -> 256 inputs + targets
+metric: neg_log_ppl
+floor: null                         # computed as -ln(vocab_size) (uniform predictor)
+epsilon: 0.04879                    # ln(1.05): "within 5% perplexity"
+batch_sizes: [8, 16, 32, 64]        # chunks of 256 tokens
+epochs: {25: 16, 100: 8}            # initial guess; the pilot calibrates it

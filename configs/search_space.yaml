@@ -1,0 +1,13 @@
+# The 6 tuned hyperparameters, identical for both architectures and all tasks.
+# The ORDER of `params` is the column order of configs/sobol_32.csv. Never reorder.
+sobol:
+  seed: 4776
+  m: 5                      # 2^5 = 32 points
+  table: sobol_32.csv
+params:
+  - {name: learning_rate,    type: float, low: 1.0e-5, high: 1.0e-2, log: true,  default: 1.0e-3}
+  - {name: warmup_fraction,  type: float, low: 0.0,    high: 0.1,    log: false, default: 0.05}
+  - {name: weight_decay,     type: float, low: 1.0e-5, high: 0.3,    log: true,  default: 0.1}
+  - {name: dropout,          type: float, low: 0.0,    high: 0.5,    log: false, default: 0.1}
+  - {name: batch_size_index, type: categorical, choices: [0, 1, 2, 3],        default: 1}
+  - {name: grad_clip,        type: categorical, choices: [0.25, 0.5, 1.0, 0.0], default: 1.0}   # 0.0 = no clipping

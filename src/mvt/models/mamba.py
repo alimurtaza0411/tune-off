@@ -1,0 +1,122 @@
+"""Mamba-1 stack (README §Models): x = x + Dropout(Mixer(RMSNorm(x))), no separate MLP.
+
+* ``impl``: ``cuda`` = mamba_ssm fused kernels; ``ref`` = pure PyTorch; ``auto`` picks cuda
+  when mamba_ssm imports and a GPU is present.
+* BiMamba (seq_cls / tok_cls): Mixer(x) + Reverse(Mixer(Reverse(x))) with SHARED weights.
+* Padding: mamba_ssm has no padding mask. Batches are right-padded, pads are zeroed before each
+  mixer, and Reverse is length-aware (only real tokens are reversed; pads stay at the end), so
+  in both directions the scan reads every real token before any pad.
+"""
+
+from __future__ import annotations
+
+import math
+
+import torch
+from torch import nn
+
+from mvt.core.config import MambaConfig, ScaleConfig
+from mvt.core.env import mamba_ssm_version
+from mvt.core.registry import register_model
+from mvt.core.types import TaskSpec
+from mvt.models.common import RMSNorm, SequenceModel
+from mvt.models.mamba_ref import MambaMixerRef
+
+
+def resolve_impl(impl: str) -> str:
+    if impl == "auto":
+        return "cuda" if torch.cuda.is_available() and mamba_ssm_version() else "ref"
+    if impl == "cuda" and not mamba_ssm_version():
+        raise RuntimeError("impl='cuda' requested but mamba_ssm is not importable")
+    return impl
+
+
+def make_mixer(d_model: int, cfg: MambaConfig, impl: str) -> nn.Module:
+    kwargs = dict(
+        d_model=d_model,
+        d_state=cfg.d_state,
+        d_conv=cfg.d_conv,
+        expand=cfg.expand,
+        dt_min=cfg.dt_min,
+        dt_max=cfg.dt_max,
+        dt_init_floor=cfg.dt_init_floor,
+        conv_bias=cfg.conv_bias,
+        bias=cfg.bias,
+    )
+    if impl == "cuda":
+        from mamba_ssm import Mamba  # lazy: CPU environments never import mamba_ssm
+
+        return Mamba(**kwargs)
+    return MambaMixerRef(**kwargs)
+
+
+def reverse_padded(x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+    """Reverse each row's first ``lengths[b]`` positions; pads stay at the end. Self-inverse."""
+    b, length = x.shape[:2]
+    t = torch.arange(length, device=x.device).expand(b, length)
+    n = lengths.unsqueeze(1)
+    idx = torch.where(t < n, n - 1 - t, t)
+    return x.gather(1, idx.unsqueeze(-1).expand_as(x))
+
+
+class BiMixer(nn.Module):
+    """Bidirectional mixer with one set of weights shared by both directions."""
+
+    def __init__(self, mixer: nn.Module) -> None:
+        super().__init__()
+        self.mixer = mixer
+
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+        backward = reverse_padded(self.mixer(reverse_padded(x, lengths)), lengths)
+        return self.mixer(x) + backward
+
+
+class MambaLayer(nn.Module):
+    def __init__(
+        self, d_model: int, cfg: MambaConfig, impl: str, bidirectional: bool, dropout: float
+    ) -> None:
+        super().__init__()
+        self.bidirectional = bidirectional
+        self.norm = RMSNorm(d_model, cfg.norm_eps)
+        mixer = make_mixer(d_model, cfg, impl)
+        self.mixer = BiMixer(mixer) if bidirectional else mixer
+        self.drop = nn.Dropout(dropout)
+
+    def core_mixer(self) -> nn.Module:
+        return self.mixer.mixer if self.bidirectional else self.mixer
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        h = self.norm(x) * mask.unsqueeze(-1).to(x.dtype)  # zero the pads
+        h = self.mixer(h, mask.sum(1)) if self.bidirectional else self.mixer(h)
+        return x + self.drop(h)
+
+
+@register_model("mamba")
+class MambaModel(SequenceModel):
+    def __init__(
+        self, scale: ScaleConfig, model_cfg: MambaConfig, spec: TaskSpec, dropout: float
+    ) -> None:
+        impl = resolve_impl(model_cfg.impl)
+        layers = [
+            MambaLayer(scale.d_model, model_cfg, impl, not spec.causal, dropout)
+            for _ in range(scale.n_layers)
+        ]
+        super().__init__(spec, scale.d_model, layers, dropout, model_cfg.norm_eps)
+        self.mamba_impl = impl
+        self._init_weights(model_cfg.init_std, scale.n_layers)
+        self.tie_weights()
+
+    def _init_weights(self, std: float, n_layers: int) -> None:
+        """Mixer internals (A_log, D, dt_proj, conv) keep their mamba_ssm initialisation.
+
+        Embedding and linear layers ~ N(0, std); out_proj additionally scaled by 1/sqrt(L).
+        """
+        for layer in self.layers:
+            mixer = layer.core_mixer()
+            nn.init.normal_(mixer.in_proj.weight, mean=0.0, std=std)
+            nn.init.normal_(mixer.x_proj.weight, mean=0.0, std=std)
+            nn.init.normal_(mixer.out_proj.weight, mean=0.0, std=std / math.sqrt(n_layers))
+            for proj in (mixer.in_proj, mixer.out_proj):
+                if proj.bias is not None:
+                    nn.init.zeros_(proj.bias)
+        self.init_embedding_and_head(std)

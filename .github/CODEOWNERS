@@ -1,0 +1,14 @@
+# Replace the placeholders with GitHub handles.
+*                                   @skeleton-owner
+/configs/tasks/sst2.yaml            @owner-sst2
+/src/mvt/tasks/sst2.py              @owner-sst2
+/configs/tasks/conll2003.yaml       @owner-conll2003
+/src/mvt/tasks/conll2003.py         @owner-conll2003
+/configs/tasks/wikitext2.yaml       @owner-wikitext2
+/src/mvt/tasks/wikitext2.py         @owner-wikitext2
+/results/sst2-*                     @owner-sst2
+/results/conll2003-*                @owner-conll2003
+/results/wikitext2-*                @owner-wikitext2
+/src/mvt/analysis/                  @owner-analysis
+/src/mvt/analysis/io.py             @skeleton-owner
+/report/                            @owner-report

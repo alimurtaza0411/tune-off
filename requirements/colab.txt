@@ -1,0 +1,5 @@
+# Exact pins for Colab T4, decided by the day-1 Colab check. TODO(skeleton owner): fill in.
+# Colab upgrades PyTorch silently, which breaks mamba_ssm wheels, so pin all three together.
+# torch==<version>
+# mamba-ssm==<version>
+# causal-conv1d==<version>

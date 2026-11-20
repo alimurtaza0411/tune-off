@@ -1,0 +1,12 @@
+name: conll2003
+head: tok_cls
+num_labels: 9                       # IOB2 tags
+dataset: {id: eriktks/conll2003, config: null, revision: null}  # TODO(owner): pin revision
+subset_seed: 22
+min_freq: 1
+max_len: 128
+metric: entity_f1                   # seqeval, default (conlleval-compatible) mode
+floor: 0.0
+epsilon: 0.01
+batch_sizes: [16, 32, 64, 128]      # sentences
+epochs: {25: 50, 100: 25}           # initial guess; the pilot calibrates it

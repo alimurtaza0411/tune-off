@@ -1,0 +1,24 @@
+# Width-only scaling: depth is fixed (Transformer 10 layers, Mamba 18 layers).
+# expected_non_embedding is checked exactly by tests/contract/test_models.py.
+tiny:   # tests and smoke only
+  d_model: 32
+  transformer: {n_layers: 2, n_heads: 2, mlp_hidden: 96}
+  mamba: {n_layers: 2}
+2m:
+  d_model: 128
+  transformer: {n_layers: 10, n_heads: 2, mlp_hidden: 384, expected_non_embedding: 2132608}
+  mamba: {n_layers: 18, expected_non_embedding: 2099072}
+8m:
+  d_model: 256
+  transformer: {n_layers: 10, n_heads: 4, mlp_hidden: 704, expected_non_embedding: 8033536}
+  mamba: {n_layers: 18, expected_non_embedding: 7884544}
+4m:
+  d_model: 192
+  extension: true
+  transformer: {n_layers: 10, n_heads: 3, mlp_hidden: 512, expected_non_embedding: 4427712}
+  mamba: {n_layers: 18, expected_non_embedding: 4531008}
+30m:
+  d_model: 512
+  extension: true
+  transformer: {n_layers: 10, n_heads: 8, mlp_hidden: 1344, expected_non_embedding: 31140352}
+  mamba: {n_layers: 18, expected_non_embedding: 30514688}
