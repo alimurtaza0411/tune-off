@@ -10,7 +10,7 @@
 4. **CI must pass:** `ruff check`, `ruff format --check`, and `pytest -m "not gpu and not data"`.
    - Task owners also run `pytest -m data` locally or on Colab before merging their task.
    - The skeleton owner runs `pytest -m gpu` on Colab before each tagged release.
-5. **Contracts change only via the contract-change protocol** (README §6). Prefer additive changes.
+5. **Contracts change only via the contract-change protocol** (README: "Rules every contributor must keep"). Prefer additive changes.
 6. **Code freeze.** Real experiments run only from a tagged release with a clean tree. After `v1.0.0`, changes to shared code are bug fixes reviewed by two people.
 7. **Results.**
    - Raw JSON in `MVT_RESULTS_ROOT` is the source of truth while running.

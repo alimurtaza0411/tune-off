@@ -10,7 +10,7 @@ import torch
 
 from mvt import __version__
 from mvt.core.config import ResolvedConfig
-from mvt.core.env import git_state, gpu_name, mamba_ssm_version, resolve_device
+from mvt.core.env import git_state, gpu_name, mamba_ssm_version, optuna_version, resolve_device
 from mvt.core.results import TrialResult
 from mvt.core.seeding import seed_everything
 from mvt.core.types import TaskData, TrialRequest
@@ -29,7 +29,8 @@ def now_iso() -> str:
 
 def load_task_data(cfg: ResolvedConfig) -> tuple[Task, TaskData]:
     task = get_task(cfg.task.name, cfg.task)
-    key = (cfg.task.model_dump_json(), cfg.fraction, task.PROCESSING_VERSION)
+    task_json = cfg.task.model_dump_json(exclude={"fp32_cells"})  # precision never changes data
+    key = (task_json, cfg.fraction, task.PROCESSING_VERSION)
     if key not in _DATA_MEMO:
         if task.cacheable:
             parts = ["taskdata", *key]
@@ -38,6 +39,11 @@ def load_task_data(cfg: ResolvedConfig) -> tuple[Task, TaskData]:
         else:
             _DATA_MEMO[key] = task.build(cfg.fraction)
     return task, _DATA_MEMO[key]
+
+
+def mamba_impl_for(cfg: ResolvedConfig, device: torch.device) -> str:
+    """The Mamba mixer implementation this trial will use (raises on a GPU without kernels)."""
+    return resolve_impl(cfg.model.impl, on_gpu=device.type == "cuda")  # type: ignore[union-attr]
 
 
 def model_summary(cfg: ResolvedConfig, impl: str | None) -> dict:
@@ -67,7 +73,7 @@ def run_trial(request: TrialRequest, cfg: ResolvedConfig, owner: str) -> TrialRe
     model_cfg = cfg.model
     impl = None
     if request.arch == "mamba":
-        impl = "ref" if device.type != "cuda" else resolve_impl(model_cfg.impl)  # type: ignore[union-attr]
+        impl = mamba_impl_for(cfg, device)
         model_cfg = model_cfg.model_copy(update={"impl": impl})
     model = build_model(request.arch, cfg.scale, model_cfg, data.spec, request.hparams.dropout)
     model.to(device)
@@ -81,7 +87,7 @@ def run_trial(request: TrialRequest, cfg: ResolvedConfig, owner: str) -> TrialRe
         epochs=epochs,
         seed=request.seed,
         device=device,
-        precision=cfg.base.precision,
+        precision=cfg.precision,
         optim_cfg=cfg.base.optimizer,
         final_lr_ratio=cfg.base.schedule.final_lr_ratio,
         n_evals=cfg.experiment.n_evals,
@@ -93,7 +99,7 @@ def run_trial(request: TrialRequest, cfg: ResolvedConfig, owner: str) -> TrialRe
     peak = torch.cuda.max_memory_allocated(device) / 2**20 if device.type == "cuda" else None
     counts = model.param_counts()
     commit, dirty = git_state()
-    use_amp = device.type == "cuda" and cfg.base.precision == "fp16"
+    use_amp = device.type == "cuda" and cfg.precision == "fp16"
     return TrialResult(
         run_id=str(uuid.uuid4()),
         cell_id=request.cell_id,
@@ -136,6 +142,7 @@ def run_trial(request: TrialRequest, cfg: ResolvedConfig, owner: str) -> TrialRe
         config_hash=cfg.hash(),
         torch_version=torch.__version__,
         mamba_ssm_version=mamba_ssm_version(),
+        optuna_version=optuna_version(),
         owner=owner,
         started_at=started,
         finished_at=now_iso(),
@@ -167,6 +174,7 @@ def failed_result(
         config_hash=cfg.hash(),
         torch_version=torch.__version__,
         mamba_ssm_version=mamba_ssm_version(),
+        optuna_version=optuna_version(),
         owner=owner,
         started_at=started,
         finished_at=now_iso(),

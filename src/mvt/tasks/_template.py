@@ -1,6 +1,6 @@
 """TEMPLATE for a real task. Copy to ``tasks/<name>.py`` and fill in. (Not registered.)
 
-Checklist (see README §"Adding a task"):
+Checklist (see README: "Adding a task"):
   1. ``configs/tasks/<name>.yaml`` exists with every field filled and ``dataset.revision`` pinned.
   2. Decorate the class with ``@register_task("<name>")`` (and uncomment it below).
   3. ``build`` is deterministic, and:
@@ -9,8 +9,11 @@ Checklist (see README §"Adding a task"):
        * the subset is drawn by ``self.finalize`` with ``config.subset_seed``;
        * truncation to ``config.max_len`` is counted (must be zero on val and test).
   4. Override ``compute_metric`` only if the head's default metric is wrong for the task.
-  5. Add ``tests/data/test_<name>.py`` (marker ``data``) asserting the split sizes.
-  6. ``pytest tests/contract`` must pass; it runs automatically for every registered task.
+  5. Import ``datasets`` and ``seqeval`` INSIDE functions, never at the top of the file: every
+     task module is imported when tasks are discovered, so a top-level import of an optional
+     package would break all tasks wherever it is missing.
+  6. Add ``tests/data/test_<name>.py`` (marker ``data``) asserting the split sizes.
+  7. ``pytest tests/contract -m "data or not data"`` must pass; it runs for every registered task.
 """
 
 from __future__ import annotations

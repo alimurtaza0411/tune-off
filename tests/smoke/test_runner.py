@@ -7,7 +7,7 @@ import dataclasses
 import pytest
 
 from mvt.core.config import PhaseCounts, load_resolved_config
-from mvt.core.results import iter_results, results_to_frame, validate_frame
+from mvt.core.results import iter_results, results_to_frame, validate_frame, write_result
 from mvt.core.types import TrialRequest
 from mvt.search import runner as runner_module
 from mvt.search.runner import CellRunner
@@ -64,7 +64,7 @@ def test_resume_pairing_and_validation(tmp_path):
     assert _runner(root).run() == 2 * (2 + 1 + 1 + 1) - 3  # resumes, no duplicates
     assert _runner(root).run() == 0
     df = results_to_frame(iter_results(root))
-    assert validate_frame(df, SMALL.expected()) == []
+    assert validate_frame(df, SMALL.expected(), ["transformer", "mamba"]) == []
     sob = df[df["phase"] == "sobol"]
     for _, g in sob.groupby("sobol_index"):  # identical hparams and seed across architectures
         assert g["hp_learning_rate"].nunique() == 1 and g["seed"].nunique() == 1
@@ -85,6 +85,15 @@ def test_tpe_history_has_all_sobol_trials(tmp_path, monkeypatch):
     _runner(tmp_path / "runs").run("sobol")
     _runner(tmp_path / "runs").run("tpe")
     assert seen == [SMALL.sobol, SMALL.sobol]  # one TPE trial per architecture
+
+
+def test_old_pilot_results_do_not_block_the_cell(tmp_path):
+    """After the pilot changes epochs or the LR range, its old results must not block runs."""
+    req, cfg = request("transformer")
+    req = dataclasses.replace(req, phase="pilot")
+    old = run_trial(req, cfg, "test").model_copy(update={"config_hash": "from-old-config"})
+    write_result(old, tmp_path / "runs")
+    _runner(tmp_path / "runs").check_rules()  # must not raise
 
 
 def test_real_phases_refuse_dirty_tree_or_missing_owner(tmp_path, monkeypatch):

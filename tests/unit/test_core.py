@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import dataclasses
+
 import pandas as pd
 import pytest
 
@@ -30,6 +32,18 @@ def test_config_hash_ignores_runtime_fields_and_arch(monkeypatch):
     monkeypatch.setenv("MVT_DATA_CACHE", "/another/place")
     assert load_resolved_config("debug_cls", 1.0, "tiny", "mamba").hash() == m.hash()
     assert load_resolved_config("debug_cls", 0.25, "tiny", "mamba").hash() != m.hash()
+
+
+def test_fp32_switch_changes_only_its_own_cell():
+    def with_fp32(cfg, cells):
+        return dataclasses.replace(cfg, task=cfg.task.model_copy(update={"fp32_cells": cells}))
+
+    target = load_resolved_config("debug_cls", 1.0, "tiny", "mamba")
+    other = load_resolved_config("debug_cls", 0.25, "tiny", "mamba")
+    switched = with_fp32(target, ["debug_cls-100-tiny"])
+    assert switched.precision == "fp32" and target.precision == "fp16"
+    assert switched.hash() != target.hash()
+    assert with_fp32(other, ["debug_cls-100-tiny"]).hash() == other.hash()
 
 
 def make_result(**overrides) -> TrialResult:
@@ -89,6 +103,9 @@ def test_floored_score():
     assert floored_score("ok", None, 0.5) == 0.5
 
 
+ARCHS = ["transformer", "mamba"]
+
+
 def _valid_frame() -> pd.DataFrame:
     rows = [
         make_result(arch=a, index=i, sobol_index=i)
@@ -99,7 +116,7 @@ def _valid_frame() -> pd.DataFrame:
 
 
 def test_validate_accepts_valid_frame():
-    assert validate_frame(_valid_frame(), {"sobol": 2}) == []
+    assert validate_frame(_valid_frame(), {"sobol": 2}, ARCHS) == []
 
 
 @pytest.mark.parametrize(
@@ -111,8 +128,9 @@ def test_validate_accepts_valid_frame():
         (lambda df: df.iloc[:3], "expected 2"),
         (lambda df: df.assign(hp_dropout=[0.1, 0.1, 0.2, 0.1]), "different hparams"),
         (lambda df: df.assign(seed=[1, 1, 2, 1]), "different seeds"),
+        (lambda df: df[df["arch"] == "transformer"], "architectures"),
     ],
 )
 def test_validate_catches_each_violation(mutate, message):
-    problems = validate_frame(mutate(_valid_frame()), {"sobol": 2})
+    problems = validate_frame(mutate(_valid_frame()), {"sobol": 2}, ARCHS)
     assert any(message in p for p in problems), problems

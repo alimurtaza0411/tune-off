@@ -1,4 +1,4 @@
-"""The task contract (README §Task contract).
+"""The task contract (README: "Rules every contributor must keep").
 
 A task turns a dataset into ``TaskData``: a ``TaskSpec`` plus lists of examples. It does NOT
 batch, pad or compute losses; the core does that identically for every task.

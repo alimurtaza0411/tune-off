@@ -1,7 +1,8 @@
-"""Mamba-1 stack (README §Models): x = x + Dropout(Mixer(RMSNorm(x))), no separate MLP.
+"""Mamba-1 stack (README: "Models"): x = x + Dropout(Mixer(RMSNorm(x))), no separate MLP.
 
-* ``impl``: ``cuda`` = mamba_ssm fused kernels; ``ref`` = pure PyTorch; ``auto`` picks cuda
-  when mamba_ssm imports and a GPU is present.
+* ``impl``: ``cuda`` = mamba_ssm fused kernels; ``ref`` = pure PyTorch; ``auto`` = cuda on a
+  GPU, ref on CPU. A GPU without working kernels is an ERROR, never a silent slow fallback.
+* Initialisation follows ``mamba_ssm``'s own ``_init_weights`` (see ``MambaModel``).
 * BiMamba (seq_cls / tok_cls): Mixer(x) + Reverse(Mixer(Reverse(x))) with SHARED weights.
 * Padding: mamba_ssm has no padding mask. Batches are right-padded, pads are zeroed before each
   mixer, and Reverse is length-aware (only real tokens are reversed; pads stay at the end), so
@@ -16,18 +17,28 @@ import torch
 from torch import nn
 
 from mvt.core.config import MambaConfig, ScaleConfig
-from mvt.core.env import mamba_ssm_version
+from mvt.core.env import mamba_ssm_import_error, mamba_ssm_version
 from mvt.core.registry import register_model
 from mvt.core.types import TaskSpec
 from mvt.models.common import RMSNorm, SequenceModel
 from mvt.models.mamba_ref import MambaMixerRef
 
 
-def resolve_impl(impl: str) -> str:
+def resolve_impl(impl: str, on_gpu: bool | None = None) -> str:
+    """Pick the mixer implementation. Raises instead of silently running the slow scan on a GPU."""
+    if on_gpu is None:
+        on_gpu = torch.cuda.is_available()
     if impl == "auto":
-        return "cuda" if torch.cuda.is_available() and mamba_ssm_version() else "ref"
-    if impl == "cuda" and not mamba_ssm_version():
-        raise RuntimeError("impl='cuda' requested but mamba_ssm is not importable")
+        impl = "cuda" if on_gpu else "ref"
+    if impl == "cuda":
+        if not on_gpu:
+            raise RuntimeError("Mamba impl 'cuda' needs a GPU")
+        if not mamba_ssm_version():
+            raise RuntimeError(
+                f"GPU found but mamba_ssm does not import ({mamba_ssm_import_error()}). "
+                "Install it as in the README (Troubleshooting). To run the slow reference scan "
+                "on purpose, set `impl: ref` in configs/models/mamba.yaml."
+            )
     return impl
 
 
@@ -107,16 +118,20 @@ class MambaModel(SequenceModel):
         self.tie_weights()
 
     def _init_weights(self, std: float, n_layers: int) -> None:
-        """Mixer internals (A_log, D, dt_proj, conv) keep their mamba_ssm initialisation.
+        """Same scheme as ``mamba_ssm.models.mixer_seq_simple._init_weights`` (Mamba-1):
 
-        Embedding and linear layers ~ N(0, std); out_proj additionally scaled by 1/sqrt(L).
+        * mixer internals (A_log, D, dt_proj, conv1d) keep the mixer's own initialisation;
+        * other linear weights keep PyTorch's default; their biases are zeroed unless marked
+          ``_no_reinit`` (dt_proj.bias);
+        * out_proj: kaiming-uniform, then divided by sqrt(n_layers) (one residual per layer);
+        * embedding ~ N(0, std). The task head uses the same init as the Transformer's.
         """
         for layer in self.layers:
             mixer = layer.core_mixer()
-            nn.init.normal_(mixer.in_proj.weight, mean=0.0, std=std)
-            nn.init.normal_(mixer.x_proj.weight, mean=0.0, std=std)
-            nn.init.normal_(mixer.out_proj.weight, mean=0.0, std=std / math.sqrt(n_layers))
-            for proj in (mixer.in_proj, mixer.out_proj):
-                if proj.bias is not None:
+            for proj in (mixer.in_proj, mixer.x_proj, mixer.dt_proj, mixer.out_proj):
+                if proj.bias is not None and not getattr(proj.bias, "_no_reinit", False):
                     nn.init.zeros_(proj.bias)
+            nn.init.kaiming_uniform_(mixer.out_proj.weight, a=math.sqrt(5))
+            with torch.no_grad():
+                mixer.out_proj.weight /= math.sqrt(n_layers)
         self.init_embedding_and_head(std)

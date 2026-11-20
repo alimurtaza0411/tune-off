@@ -1,4 +1,4 @@
-"""Typed configs loaded from ``configs/*.yaml`` (README §Config contract).
+"""Typed configs loaded from ``configs/*.yaml`` (README: "Rules every contributor must keep").
 
 Every experimental constant lives in YAML. This module only parses and validates it.
 """
@@ -14,6 +14,8 @@ from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
+
+from mvt.core.types import make_cell_id
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CONFIG_DIR = REPO_ROOT / "configs"
@@ -119,6 +121,8 @@ class TaskConfig(_Strict):
     holdout_seed: int | None = None
     holdout_fraction: float | None = None
     dataset: DatasetConfig | None = None
+    # Cells (e.g. "sst2-025-8m") that hit fp16 NaNs run in fp32, for BOTH architectures.
+    fp32_cells: list[str] = []
     options: dict[str, Any] = {}
 
     @field_validator("batch_sizes")
@@ -227,6 +231,15 @@ class ResolvedConfig:
     scale: ScaleConfig
     search_space: SearchSpaceConfig
 
+    @property
+    def cell_id(self) -> str:
+        return make_cell_id(self.task_name, self.fraction, self.scale.name)
+
+    @property
+    def precision(self) -> str:
+        """fp32 if this cell is listed in the task's ``fp32_cells``, else the global setting."""
+        return "fp32" if self.cell_id in self.task.fp32_cells else self.base.precision
+
     def hash(self) -> str:
         return config_hash(self)
 
@@ -252,16 +265,19 @@ def config_hash(cfg: ResolvedConfig) -> str:
     """First 12 hex chars of SHA-256 over the canonical JSON, without runtime-only fields.
 
     The hash identifies a CELL, so it covers both architectures' model and scale settings and
-    is identical for the Transformer and Mamba trials of the same cell.
+    is identical for the Transformer and Mamba trials of the same cell. The ``fp32_cells`` list
+    enters only as this cell's effective precision, so switching one cell to fp32 does not
+    change the hash of any other cell.
     """
     base = cfg.base.model_dump(mode="json")
     base["runtime"] = {k: v for k, v in base["runtime"].items() if k not in RUNTIME_ONLY_FIELDS}
     payload = {
         "task_name": cfg.task_name,
         "fraction": cfg.fraction,
+        "precision": cfg.precision,
         "experiment": cfg.experiment.model_dump(mode="json"),
         "base": base,
-        "task": cfg.task.model_dump(mode="json"),
+        "task": cfg.task.model_dump(mode="json", exclude={"fp32_cells"}),
         "models": {a: load_model_config(a).model_dump(mode="json") for a in MODEL_CONFIGS},
         "scales": {a: load_scale(cfg.scale.name, a).model_dump(mode="json") for a in MODEL_CONFIGS},
         "search_space": cfg.search_space.model_dump(mode="json"),

@@ -1,5 +1,11 @@
-# Exact pins for Colab T4, decided by the day-1 Colab check. TODO(skeleton owner): fill in.
-# Colab upgrades PyTorch silently, which breaks mamba_ssm wheels, so pin all three together.
-# torch==<version>
-# mamba-ssm==<version>
-# causal-conv1d==<version>
+# Mamba CUDA kernels for Colab (T4). Install AFTER the package, WITHOUT build isolation, so they
+# compile against the PyTorch that Colab already has:
+#
+#   pip install packaging ninja wheel
+#   pip install --no-build-isolation -r requirements/colab.txt
+#
+# These pins are UNVERIFIED until the day-1 Colab check. If they fail to build against Colab's
+# PyTorch, change them here in a pull request. After the first working session, commit that
+# session's `pip freeze` as requirements/colab-freeze.txt (the notebook writes it to Drive).
+causal-conv1d==1.5.0.post8
+mamba-ssm==2.2.4

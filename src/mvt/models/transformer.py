@@ -1,4 +1,4 @@
-"""LLaMA-style Transformer (README §Models): RMSNorm pre-norm, RoPE attention, SwiGLU MLP."""
+"""LLaMA-style Transformer (README: "Models"): RMSNorm pre-norm, RoPE attention, SwiGLU MLP."""
 
 from __future__ import annotations
 

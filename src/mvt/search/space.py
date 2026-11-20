@@ -1,4 +1,4 @@
-"""The 6-dimensional search space (README §Search space).
+"""The 6-dimensional search space (README: "What gets tuned").
 
 A point is either a unit vector ``u`` in [0, 1)^6 (Sobol) or an Optuna parameter dict (TPE).
 Both are converted to ``HParams``. Batch size is searched as a choice INDEX (0-3), so a Sobol

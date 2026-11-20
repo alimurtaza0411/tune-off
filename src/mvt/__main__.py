@@ -1,4 +1,4 @@
-"""Command-line interface: ``python -m mvt <command>`` (README §Command-line interface)."""
+"""Command-line interface: ``python -m mvt <command>`` (README: "Running experiments")."""
 
 from __future__ import annotations
 
@@ -110,7 +110,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
         print(f"no CSV files in {args.path}")
         return 1
     df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
-    problems = validate_frame(df, load_experiment().phases.expected())
+    experiment = load_experiment()
+    problems = validate_frame(df, experiment.phases.expected(), experiment.archs)
     print("\n".join(problems) if problems else f"OK: {len(files)} cell file(s) valid")
     return 1 if problems else 0
 
@@ -140,7 +141,7 @@ def cmd_smoke(args: argparse.Namespace) -> int:
         runner.run("all")
         export_cell(runs, make_cell_id(task, smoke.fraction, smoke.scale), csvs)
     df = pd.concat([pd.read_csv(f) for f in sorted(csvs.glob("*.csv"))], ignore_index=True)
-    problems = validate_frame(df, smoke.phases.expected())
+    problems = validate_frame(df, smoke.phases.expected(), ["transformer", "mamba"])
     elapsed = time.perf_counter() - start
     if problems:
         print("SMOKE FAILED:\n" + "\n".join(problems))

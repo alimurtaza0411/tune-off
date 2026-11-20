@@ -1,4 +1,4 @@
-"""Results contract, schema version 1 (README §Results contract).
+"""Results contract, schema version 1 (README: "Rules every contributor must keep").
 
 One JSON file per trial at ``{root}/{cell_id}/{arch}/{phase}/{index:03d}.json``.
 Files are written atomically and never overwritten unless ``force=True``.
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +85,7 @@ class TrialResult(BaseModel):
     config_hash: str
     torch_version: str | None = None
     mamba_ssm_version: str | None = None
+    optuna_version: str | None = None
     owner: str
     started_at: str
     finished_at: str
@@ -166,8 +167,16 @@ def export_cell(root: str | Path, cell_id: str, out_dir: str | Path = "results")
     return out
 
 
-def validate_frame(df: pd.DataFrame, expected: dict[str, int] | None = None) -> list[str]:
-    """Return a list of problems (empty = valid). ``expected`` maps phase -> count per arch."""
+def validate_frame(
+    df: pd.DataFrame,
+    expected: dict[str, int] | None = None,
+    archs: Sequence[str] | None = None,
+) -> list[str]:
+    """Return a list of problems (empty = valid).
+
+    ``expected`` maps phase -> count per architecture; ``archs`` lists the architectures every
+    cell must contain (a cell with only one architecture cannot be compared).
+    """
     problems: list[str] = []
     missing = [c for c in _column_order() if c not in df.columns]
     if missing:
@@ -179,6 +188,10 @@ def validate_frame(df: pd.DataFrame, expected: dict[str, int] | None = None) -> 
         problems.append(f"unknown status values: {bad_status}")
 
     for cell, g in df.groupby("cell_id"):
+        if archs is not None and set(g["arch"]) != set(archs):
+            problems.append(
+                f"{cell}: architectures {sorted(set(g['arch']))}, expected {sorted(archs)}"
+            )
         if g["config_hash"].nunique() > 1:
             problems.append(f"{cell}: mixes config hashes {sorted(g['config_hash'].unique())}")
         families = {".".join(str(v).split(".")[:2]) for v in g["code_version"]}

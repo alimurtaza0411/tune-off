@@ -17,6 +17,6 @@ def get_task(name: str, config: TaskConfig) -> Task:
     if name not in TASKS:
         raise NotImplementedError(
             f"Task '{name}' is not implemented yet — see tasks/_template.py "
-            f'and README §"Adding a task"'
+            f'and the README section "Adding a task"'
         )
     return TASKS.get(name)(config)

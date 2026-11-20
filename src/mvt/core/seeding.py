@@ -1,4 +1,4 @@
-"""Deterministic seeds (README §Seeds)."""
+"""Deterministic seeds (README: "What happens inside one cell")."""
 
 from __future__ import annotations
 

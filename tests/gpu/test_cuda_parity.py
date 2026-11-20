@@ -1,4 +1,8 @@
-"""GPU checks (run on a Colab T4 with ``pytest -m gpu``)."""
+"""GPU checks (run on a Colab T4 with ``pytest -m gpu``).
+
+These tests FAIL, never skip, when the GPU or the Mamba kernels are missing: a skipped GPU test
+would hide exactly the problem it exists to catch.
+"""
 
 from __future__ import annotations
 
@@ -6,16 +10,16 @@ import pytest
 import torch
 
 from mvt.core.config import load_model_config
-from mvt.core.env import mamba_ssm_version
+from mvt.core.env import mamba_ssm_import_error, mamba_ssm_version
 from mvt.models.mamba import BiMixer, make_mixer
 
-pytestmark = [
-    pytest.mark.gpu,
-    pytest.mark.skipif(
-        not torch.cuda.is_available() or mamba_ssm_version() is None,
-        reason="needs CUDA and mamba_ssm",
-    ),
-]
+pytestmark = pytest.mark.gpu
+
+
+@pytest.fixture(autouse=True)
+def _require_gpu_and_kernels():
+    assert torch.cuda.is_available(), "pytest -m gpu needs a CUDA GPU"
+    assert mamba_ssm_version(), f"mamba_ssm does not import: {mamba_ssm_import_error()}"
 
 
 @pytest.mark.parametrize("bidirectional", [False, True])

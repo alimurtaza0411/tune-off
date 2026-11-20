@@ -1,4 +1,4 @@
-"""The training loop (README §Training recipe).
+"""The training loop (README: "Training recipe").
 
 Runs exactly ``total_steps`` steps, evaluates on validation at 20 evenly spaced points and
 keeps the best score. A non-finite training loss means the run DIVERGED: training stops and the

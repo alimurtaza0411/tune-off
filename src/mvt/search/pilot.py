@@ -1,4 +1,4 @@
-"""The pilot (README §Pilot protocol). Pilot results are NEVER used in the analysis.
+"""The pilot (README: "Pilot and code freeze"). Pilot results are NEVER used in the analysis.
 
 1. Learning-rate sweep at 8m: 7 log-spaced learning rates, other hparams at lambda_0.
 2. Scale check at 2m: one run per (fraction, arch) at that arch's best sweep learning rate.
@@ -26,12 +26,17 @@ N_SWEEP = 7
 
 
 def _run(request: TrialRequest, root: Path, owner: str) -> TrialResult:
-    path = result_path(root, request.cell_id, request.arch, "pilot", request.index)
-    if path.exists():
-        return read_result(path)
+    """Run one pilot trial, reusing a saved result only if it came from the current config."""
     cfg = load_resolved_config(request.task, request.fraction, request.scale, request.arch)
+    path = result_path(root, request.cell_id, request.arch, "pilot", request.index)
+    stale = False
+    if path.exists():
+        saved = read_result(path)
+        if saved.config_hash == cfg.hash():
+            return saved
+        stale = True  # epochs or LR range changed since: re-run and replace
     result = run_trial(request, cfg, owner)
-    write_result(result, root)
+    write_result(result, root, force=stale)
     log.info(
         "pilot %s %s lr=%.2e -> %s",
         request.cell_id,

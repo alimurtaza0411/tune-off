@@ -1,4 +1,4 @@
-# The experimental grid (README §"Experimental grid").
+# The experimental grid (README: "The experiment").
 tasks: [sst2, conll2003, wikitext2]
 fractions: [0.25, 1.0]
 scales: [2m, 8m]            # run all 2m cells first (rehearsal), then all 8m cells

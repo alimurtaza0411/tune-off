@@ -12,15 +12,14 @@ license = { text = "MIT" }
 dependencies = [
   "torch>=2.3",
   "numpy",
-  "scipy",
+  "scipy>=1.11,<1.18",   # sobol --check relies on Sobol(seed=...)
   "pandas",
   "pyyaml",
   "pydantic>=2",
-  "optuna>=3.4",
+  "optuna==5.1.0",       # exact: TPE suggestions differ between versions
 ]
 
 [project.optional-dependencies]
-cuda = ["mamba-ssm", "causal-conv1d"]  # exact pins live in requirements/colab.txt
 tasks = ["datasets", "seqeval"]
 analysis = ["matplotlib", "scikit-learn"]
 dev = ["pytest", "ruff"]
@@ -30,7 +29,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not gpu and not data'"   # run GPU / data tests with -m gpu / -m data
 markers = [
   "gpu: needs a CUDA GPU with mamba_ssm installed (run on Colab)",
   "data: downloads a real dataset (run by task owners)",

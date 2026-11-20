@@ -32,6 +32,7 @@ def _expand(paths: str | Path | Iterable[str | Path]) -> list[Path]:
 def load_results(
     paths: str | Path | Iterable[str | Path] = "results",
     expected: dict[str, int] | None = None,
+    archs: list[str] | None = None,
     strict: bool = True,
 ) -> pd.DataFrame:
     files = _expand(paths)
@@ -39,7 +40,7 @@ def load_results(
         raise FileNotFoundError(f"No result CSVs found in {paths}")
     df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
 
-    problems = [p for p in validate_frame(df, expected) if "failed trial" not in p]
+    problems = [p for p in validate_frame(df, expected, archs) if "failed trial" not in p]
     if problems:
         message = "Result validation problems:\n  " + "\n  ".join(problems)
         if strict:

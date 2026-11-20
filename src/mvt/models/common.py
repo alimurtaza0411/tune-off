@@ -1,4 +1,4 @@
-"""Parts shared by both architectures (README §Models, shared rules).
+"""Parts shared by both architectures (README: "Models").
 
 token embedding -> dropout -> N residual layers -> final RMSNorm -> task head
 """

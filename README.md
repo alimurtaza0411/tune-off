@@ -37,6 +37,21 @@ We test this on **real NLP tasks**. Both architectures get identical, paired tun
 - **C2, data scarcity:** the Transformer's lead is larger with 100% data than with 25%. Supported where the confidence interval of that difference is above zero at every budget n ∈ {1, 2, 4, 8, 16, 32}.
 - **E1, model size (exploratory):** how robustness and learning-rate importance change from 2M to 8M parameters. No predicted direction.
 
+**From per-setting verdicts to a headline claim** (also fixed in advance). C1 is tested in 12 settings (3 tasks ×
+2 data sizes × 2 model sizes) and C2 in 6 (3 tasks × 2 model sizes). Every per-setting verdict is reported in one table.
+
+| Headline verdict | Rule |
+|---|---|
+| **Supported overall** | Supported in a majority of settings (C1: at least 7 of 12; C2: at least 4 of 6), and significantly contradicted in none |
+| **Refuted overall** | The opposite direction is significant in a majority of settings |
+| **Mixed** | Anything else, described task by task |
+| **Supported for one task** | Supported in every setting of that task (C1: 4 of 4; C2: 2 of 2) |
+
+For C1, "contradicted" means either part, robustness or learning-rate importance, is significant in the opposite
+direction. Each setting uses its own 95% interval with no multiple-comparison correction. The majority rule keeps one
+or two chance results from deciding the headline. E1 is exploratory: its direction and interval are reported per
+task and data size, with no headline claim.
+
 **What we do not claim:** anything about billion-parameter models, Mamba's speed or long-sequence efficiency
 (our inputs are short), Mamba-2, hybrids, pretrained models, or that either architecture is "better" overall.
 
@@ -79,11 +94,24 @@ pip install -e ".[dev,analysis]"     # CPU is enough for development
 
 python -m mvt info                    # environment report (GPU, versions, Mamba kernel)
 python -m mvt smoke                   # full pipeline on synthetic tasks, about 1 minute on CPU
-pytest -m "not gpu and not data"      # the test suite CI runs
+pytest                                # the CPU test suite CI runs (GPU and dataset tests are opt-in)
 ```
 
-Extras: `[cuda]` installs the fast Mamba kernels (GPU only), `[tasks]` installs `datasets` and `seqeval` for the real
-tasks. On Colab, use [`notebooks/colab_runner.ipynb`](notebooks/colab_runner.ipynb), which installs everything.
+The `[tasks]` extra installs `datasets` and `seqeval` for the real tasks.
+
+**On a GPU (Colab):** use [`notebooks/colab_runner.ipynb`](notebooks/colab_runner.ipynb). It installs the package and
+then compiles the Mamba CUDA kernels against Colab's PyTorch:
+
+```bash
+pip install -e ".[tasks]"
+pip install packaging ninja wheel
+pip install --no-build-isolation -r requirements/colab.txt   # pinned mamba-ssm and causal-conv1d
+```
+
+Version pins: Optuna is pinned exactly, because TPE suggestions change between versions, and SciPy is pinned to a
+range. The Mamba pins in `requirements/colab.txt` are confirmed by the first Colab session, whose full `pip freeze`
+is then committed as `requirements/colab-freeze.txt`. Every result also records the PyTorch, `mamba_ssm` and Optuna
+versions it ran with.
 
 ## Running experiments
 
@@ -111,8 +139,12 @@ Useful options for `run`: `--phase sobol|tpe|replicates`, `--arch transformer|ma
 such as Ctrl-C or a Colab disconnect, run the same command again. Finished trials are skipped, and only the
 interrupted trial restarts, with the same seed.
 
-**Real runs need a clean checkout.** The `sobol`, `tpe`, `best` and `default` phases refuse to start if the git tree
-has uncommitted changes or `MVT_OWNER` is unset. This way, every result can be traced to an exact commit.
+**Real runs need a clean checkout.** The `sobol`, `tpe`, `best` and `default` phases refuse to start if `src/`,
+`configs/` or `pyproject.toml` contain modified **or untracked** files, or if `MVT_OWNER` is unset. This way, every
+result can be traced to an exact commit. Pilot runs are exempt, and their results never block a cell.
+
+**Setup problems stop the run before any trial starts.** The task data is loaded and the Mamba kernels are checked
+first. A missing dataset or a broken install is reported once and is never recorded as 66 failed trials.
 
 **A cell is done** when `mvt status` shows 66/66 for both architectures, `mvt validate` passes, and the exported CSV
 is merged through a pull request. Commit only your own cells' CSVs, never the raw run folders.
@@ -155,7 +187,7 @@ layer is `x = x + Dropout(Mixer(RMSNorm(x)))`. Both use the same dropout placeme
 for classification, a per-token layer for tagging, and an output layer tied to the embedding for language modelling.
 
 - **Transformer:** LLaMA-style, with rotary position embeddings, a SwiGLU feed-forward block and no biases. This is the "Transformer++" baseline the Mamba paper itself uses. *Why:* it's the strongest, most stable modern baseline. A fragile baseline would exaggerate any difference.
-- **Mamba:** Mamba-1 blocks from `mamba_ssm`, with standard settings. On GPU we use the fast CUDA kernels. A pure-PyTorch copy with identical weights runs on CPU for tests; its scores are valid but its timings are not.
+- **Mamba:** Mamba-1 blocks from `mamba_ssm` (state size 16, convolution width 4, expansion 2), initialised exactly as `mamba_ssm` initialises its own models. Only the classification and tagging head shares the Transformer's initialisation. On GPU we use the fast CUDA kernels. A GPU without working kernels is an error, never a silent switch to the slow version. A pure-PyTorch copy with identical weights runs on CPU for tests; its scores are valid but its timings are not.
 - **Classification and tagging read text in both directions.** The Transformer attends both ways. Mamba runs the same block forwards and backwards, with shared weights, and adds the two results. Language modelling is left-to-right for both.
 - **Padding never leaks into results.** Mamba has no padding mask, so pads are zeroed and the backward pass reverses only the real tokens. A test checks that adding padding never changes outputs.
 
@@ -264,8 +296,8 @@ for language modelling.
 **Result files:** one JSON per trial at `{MVT_RESULTS_ROOT}/{cell_id}/{arch}/{phase}/{index:03d}.json`. The
 `cell_id` looks like `sst2-025-8m` (task, data percent, size). Each file records the hyperparameters, scores,
 validation curve, timings, memory, parameter counts and provenance: git commit, config hash, GPU and owner.
-`mvt export` flattens one cell into `results/{cell_id}.csv`. `mvt validate` checks complete counts (32/24/5/5),
-no duplicates, identical Sobol settings and seeds across architectures, one config version per cell, and no failed
+`mvt export` flattens one cell into `results/{cell_id}.csv`. `mvt validate` checks that both architectures are
+present, complete counts (32/24/5/5), no duplicates, identical Sobol settings and seeds across architectures, one config version per cell, and no failed
 trials.
 
 </details>
@@ -311,9 +343,9 @@ architectures.
 
 | Problem | Fix |
 |---|---|
-| `mamba_ssm` import fails with "undefined symbol" | The wheel doesn't match your PyTorch or CUDA version. Install the matching PyTorch, or build from source with `pip install . --no-build-isolation`. |
-| `mvt info` shows Mamba implementation `ref` on a GPU | The fast kernels aren't installed. Scores stay valid, but timings don't. Install the `[cuda]` extra. |
-| NaN losses that look like fp16 overflow | Set `precision: fp32` in `configs/base.yaml` for that cell, for **both** architectures, and note it. |
+| Mamba kernels fail to build, or `mamba_ssm` import fails with "undefined symbol" | They must be compiled against the installed PyTorch: `pip install --no-build-isolation -r requirements/colab.txt`. If the pinned versions don't build on Colab's PyTorch, update the pins in a pull request. |
+| `mvt info` or `mvt run` reports "GPU found but mamba_ssm does not import" | The kernels aren't installed (see above). Don't work around this for real runs. Only for debugging, `impl: ref` in `configs/models/mamba.yaml` forces the slow version. |
+| NaN losses in one cell that look like fp16 overflow | Add that cell's id to `fp32_cells` in its task YAML, for example `fp32_cells: [sst2-025-8m]`. Both architectures of that cell switch to fp32 and no other cell changes. Move that cell's old results aside, then re-run it. |
 | Colab disconnected mid-run | Re-run the notebook. Finished trials are skipped automatically. |
 | `run` refuses to start | Commit your changes (real runs need a clean tree) and set `MVT_OWNER`. |
 

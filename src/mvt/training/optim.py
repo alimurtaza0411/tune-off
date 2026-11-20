@@ -1,4 +1,4 @@
-"""AdamW with weight-decay groups and the warmup + cosine schedule (README §Training recipe)."""
+"""AdamW with weight-decay groups and the warmup + cosine schedule (README: "Training recipe")."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Batching shared by every task (README §Batch contract).
+"""Batching shared by every task (README: "Rules every contributor must keep").
 
 Every batch is a dict with ``input_ids`` [B, L], ``attention_mask`` [B, L] (True = real token,
 real tokens always form a prefix), ``labels`` and ``n_tokens``.

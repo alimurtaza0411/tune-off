@@ -1,4 +1,4 @@
-"""Run one cell, resumably (README §Running experiments).
+"""Run one cell, resumably (README: "Running experiments").
 
 Order inside a phase is interleaved: (index 0, transformer), (index 0, mamba), (index 1, ...),
 so both architectures progress together on the same machine. Existing result files are
@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from mvt.core.config import PhaseCounts, load_resolved_config
-from mvt.core.env import git_state
+from mvt.core.env import git_state, resolve_device
 from mvt.core.results import (
     TrialResult,
     floored_score,
@@ -23,11 +23,11 @@ from mvt.core.results import (
     write_result,
 )
 from mvt.core.seeding import derive_seed
-from mvt.core.types import PHASE_ORDER, HParams, TrialRequest, make_cell_id
+from mvt.core.types import PHASE_ORDER, REAL_PHASES, HParams, TrialRequest, make_cell_id
 from mvt.search import tpe
 from mvt.search.sobol import load_table
 from mvt.search.space import SearchSpace
-from mvt.search.trial import failed_result, now_iso, run_trial
+from mvt.search.trial import failed_result, load_task_data, mamba_impl_for, now_iso, run_trial
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +64,10 @@ class CellRunner:
 
     # ------------------------------------------------------------ rules
     def check_rules(self) -> None:
-        """Real phases need an owner and a clean git tree; never mix config hashes in a cell."""
+        """Real phases need an owner and a clean git tree; never mix config hashes in a cell.
+
+        Only real-phase results are compared: pilot results may come from an older config.
+        """
         if self.enforce_rules:
             if not self.owner:
                 raise RuntimeError("Set MVT_OWNER before running real phases")
@@ -72,17 +75,31 @@ class CellRunner:
             if dirty:
                 raise RuntimeError("Uncommitted changes: real phases must run from a clean tree")
         for result in iter_results(self.root, self.cell_id):
+            if result.phase not in REAL_PHASES:
+                continue
             expected = self.cfgs[result.arch].hash() if result.arch in self.cfgs else None
             if expected and result.config_hash != expected:
                 raise RuntimeError(
                     f"{self.cell_id} has results with config hash {result.config_hash}, "
-                    f"but the current config hash is {expected}"
+                    f"but the current config hash is {expected}. Move the old results aside "
+                    "before re-running this cell."
                 )
+
+    def preflight(self) -> None:
+        """Fail fast, before any trial: load the task data once and check the Mamba kernels.
+
+        Errors here are setup problems, so they must not be recorded as failed trials.
+        """
+        cfg = self.cfgs[self.archs[0]]
+        load_task_data(cfg)
+        if "mamba" in self.cfgs:
+            mamba_impl_for(self.cfgs["mamba"], resolve_device(cfg.base.runtime.device))
 
     # ------------------------------------------------------------ public
     def run(self, phase: str = "all", limit: int | None = None, retry_failed: bool = False) -> int:
         """Run (or resume) the requested phases. Returns the number of trials executed."""
         self.check_rules()
+        self.preflight()
         self.limit, self.retry_failed, self.n_run = limit, retry_failed, 0
         for name in PHASE_GROUPS[phase]:
             for request in self._requests(name):

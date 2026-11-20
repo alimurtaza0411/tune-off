@@ -1,4 +1,4 @@
-"""The fixed table of 32 scrambled-Sobol points shared by every cell (README §Paired Sobol).
+"""The fixed table of 32 scrambled-Sobol points shared by every cell (README: "What gets tuned").
 
 The table stores u-values in [0, 1)^6 only, so it does not depend on the search ranges.
 Generate it once with ``python -m mvt sobol --write``; never edit it by hand.

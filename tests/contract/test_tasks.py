@@ -78,4 +78,4 @@ def test_metric_is_max_on_perfect_predictions(name):
 
 def test_unimplemented_task_has_clear_message():
     with pytest.raises(NotImplementedError, match="not implemented yet"):
-        get_task("sst2", load_task_config("sst2"))
+        get_task("not_a_registered_task", load_task_config("debug_cls"))

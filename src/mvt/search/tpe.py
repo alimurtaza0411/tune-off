@@ -1,4 +1,4 @@
-"""Deterministic, resumable TPE (README §Phases).
+"""Deterministic, resumable TPE (README: "What happens inside one cell").
 
 For TPE trial k, an in-memory Optuna study is rebuilt from the SAVED results (32 Sobol + TPE
 0..k-1), and a freshly seeded ``TPESampler`` suggests one configuration. There is no Optuna

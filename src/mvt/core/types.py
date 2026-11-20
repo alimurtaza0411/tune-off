@@ -1,4 +1,7 @@
-"""Plain data types that define the contracts between modules (README §Contracts)."""
+"""Plain data types that define the contracts between modules.
+
+See the README section "Rules every contributor must keep".
+"""
 
 from __future__ import annotations
 
